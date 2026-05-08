@@ -5,31 +5,296 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+from scipy.optimize import brentq
 
-from asw.bond import dirty_price_from_ytm, ytm_from_dirty_price
-from asw.curve import build_discount_factor, curve_dataframe
-from asw.pricing import pricing_report, par_asw_spread
-from asw.analytics import (
-    cashflow_table,
-    price_sensitivity,
-    maturity_sensitivity,
-)
-from asw.plots import (
-    plot_zero_curve,
-    plot_cashflows,
-    plot_price_sensitivity,
-    plot_maturity_sensitivity,
-    plot_leg_decomposition,
+
+# =============================================================================
+# CURVE
+# =============================================================================
+
+def build_discount_factor(tenors: list[float], zero_rates: list[float]):
+    """Continuous-compounding zero curve, linear interpolation on rates."""
+    ts = np.asarray(tenors, dtype=float)
+    rs = np.asarray(zero_rates, dtype=float)
+
+    def DF(t: float) -> float:
+        if t <= 0.0:
+            return 1.0
+        r = float(np.interp(t, ts, rs))
+        return float(np.exp(-r * t))
+
+    return DF
+
+
+def forward_simple(DF, t1: float, t2: float) -> float:
+    """Simple-compounded forward between t1 and t2 (tau = t2 - t1)."""
+    tau = t2 - t1
+    return (DF(t1) / DF(t2) - 1.0) / tau
+
+
+def curve_dataframe(tenors: list[float], zero_rates: list[float],
+                    n_points: int = 100) -> pd.DataFrame:
+    ts = np.linspace(min(tenors), max(tenors), n_points)
+    rs = np.interp(ts, tenors, zero_rates)
+    return pd.DataFrame({"tenor": ts, "zero_rate": rs})
+
+
+# =============================================================================
+# BOND
+# =============================================================================
+
+def coupon_schedule(maturity: float, frequency: int) -> list[float]:
+    n = int(round(maturity * frequency))
+    dt = 1.0 / frequency
+    return [(i + 1) * dt for i in range(n)]
+
+
+def dirty_price_from_ytm(coupon_rate: float, maturity: float, ytm: float,
+                          frequency: int, notional: float = 100.0) -> float:
+    dates = coupon_schedule(maturity, frequency)
+    c = coupon_rate * notional / frequency
+    pv = 0.0
+    for t in dates:
+        pv += c / (1.0 + ytm / frequency) ** (t * frequency)
+    pv += notional / (1.0 + ytm / frequency) ** (maturity * frequency)
+    return pv
+
+
+def ytm_from_dirty_price(dirty: float, coupon_rate: float, maturity: float,
+                         frequency: int, notional: float = 100.0) -> float:
+    def diff(y: float) -> float:
+        return dirty_price_from_ytm(coupon_rate, maturity, y, frequency, notional) - dirty
+    return brentq(diff, -0.5, 1.0, xtol=1e-10)
+
+
+# =============================================================================
+# PRICING
+# =============================================================================
+
+def _fixed_leg_pv(coupon_rate: float, maturity: float, frequency: int,
+                  DF, notional: float) -> float:
+    dates = coupon_schedule(maturity, frequency)
+    tau = 1.0 / frequency
+    return sum(coupon_rate * notional * tau * DF(t) for t in dates)
+
+
+def _floating_leg_components(maturity: float, frequency: int, DF,
+                              notional: float) -> tuple[float, float]:
+    """Return (PV of Libor leg without spread, floating annuity)."""
+    dates = coupon_schedule(maturity, frequency)
+    tau = 1.0 / frequency
+    pv_libor = 0.0
+    annuity = 0.0
+    t_prev = 0.0
+    for t in dates:
+        L = forward_simple(DF, t_prev, t)
+        pv_libor += L * notional * tau * DF(t)
+        annuity += tau * DF(t)
+        t_prev = t
+    return pv_libor, annuity
+
+
+def par_asw_spread(coupon_rate: float, maturity: float, dirty_price: float,
+                   fix_frequency: int, flt_frequency: int, DF,
+                   notional: float = 100.0) -> float:
+    pv_fix = _fixed_leg_pv(coupon_rate, maturity, fix_frequency, DF, notional)
+    pv_libor, annuity_flt = _floating_leg_components(
+        maturity, flt_frequency, DF, notional
+    )
+    upfront = dirty_price - notional
+    return (pv_fix - pv_libor - upfront) / (annuity_flt * notional)
+
+
+def pricing_report(coupon_rate: float, maturity: float, dirty_price: float,
+                   fix_frequency: int, flt_frequency: int, DF,
+                   notional: float = 100.0,
+                   market_spread_bps: float | None = None) -> dict:
+    pv_fix = _fixed_leg_pv(coupon_rate, maturity, fix_frequency, DF, notional)
+    pv_libor, annuity_flt = _floating_leg_components(
+        maturity, flt_frequency, DF, notional
+    )
+    upfront = dirty_price - notional
+    spread = (pv_fix - pv_libor - upfront) / (annuity_flt * notional)
+
+    out = {
+        "fair_spread_bps": spread * 1e4,
+        "upfront": upfront,
+        "premium_leg_pv": pv_fix,
+        "libor_leg_pv": pv_libor,
+        "floating_annuity": annuity_flt,
+        "pv01_floating": annuity_flt * notional * 1e-4,
+        "dirty_price": dirty_price,
+    }
+
+    if market_spread_bps is not None:
+        market_spread = market_spread_bps / 1e4
+        mtm = (spread - market_spread) * annuity_flt * notional
+        out["market_spread_bps"] = market_spread_bps
+        out["mtm"] = mtm
+
+    return out
+
+
+# =============================================================================
+# ANALYTICS
+# =============================================================================
+
+def cashflow_table(coupon_rate: float, maturity: float, fix_frequency: int,
+                    flt_frequency: int, spread: float, DF,
+                    notional: float = 100.0) -> pd.DataFrame:
+    fix_dates = set(np.round(coupon_schedule(maturity, fix_frequency), 8))
+    flt_dates = coupon_schedule(maturity, flt_frequency)
+    tau_fix = 1.0 / fix_frequency
+    tau_flt = 1.0 / flt_frequency
+
+    rows = []
+    t_prev = 0.0
+    for t in flt_dates:
+        L = forward_simple(DF, t_prev, t)
+        cf_flt = -(L + spread) * notional * tau_flt
+        cf_fix = (coupon_rate * notional * tau_fix
+                  if round(t, 8) in fix_dates else 0.0)
+        rows.append({
+            "t": t,
+            "DF": DF(t),
+            "libor_fwd": L,
+            "cf_fix_received": cf_fix,
+            "cf_flt_paid": cf_flt,
+            "cf_net": cf_fix + cf_flt,
+        })
+        t_prev = t
+
+    return pd.DataFrame(rows)
+
+
+def price_sensitivity(coupon_rate: float, maturity: float,
+                       fix_frequency: int, flt_frequency: int, DF,
+                       price_min: float = 90.0, price_max: float = 110.0,
+                       n: int = 41, notional: float = 100.0) -> pd.DataFrame:
+    prices = np.linspace(price_min, price_max, n)
+    spreads = [par_asw_spread(coupon_rate, maturity, p, fix_frequency,
+                               flt_frequency, DF, notional) * 1e4
+               for p in prices]
+    return pd.DataFrame({"dirty_price": prices, "spread_bps": spreads})
+
+
+def maturity_sensitivity(coupon_rate: float, dirty_price: float,
+                          fix_frequency: int, flt_frequency: int, DF,
+                          mat_min: float = 1.0, mat_max: float = 10.0,
+                          n: int = 19, notional: float = 100.0) -> pd.DataFrame:
+    mats = np.linspace(mat_min, mat_max, n)
+    spreads = [par_asw_spread(coupon_rate, m, dirty_price, fix_frequency,
+                               flt_frequency, DF, notional) * 1e4
+               for m in mats]
+    return pd.DataFrame({"maturity": mats, "spread_bps": spreads})
+
+
+# =============================================================================
+# PLOTS
+# =============================================================================
+
+_LAYOUT = dict(
+    template="plotly_white",
+    height=400,
+    margin=dict(l=40, r=20, t=50, b=40),
+    legend=dict(orientation="h", y=-0.2),
 )
 
-# Page setup
+
+def plot_zero_curve(curve_df: pd.DataFrame,
+                     pillars: list[tuple[float, float]] | None = None) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=curve_df["tenor"], y=curve_df["zero_rate"] * 100,
+        mode="lines", name="Zero rate", line=dict(width=2.5),
+    ))
+    if pillars:
+        xs, ys = zip(*pillars)
+        fig.add_trace(go.Scatter(
+            x=list(xs), y=[y * 100 for y in ys],
+            mode="markers", name="Pillars",
+            marker=dict(size=10, symbol="diamond"),
+        ))
+    fig.update_layout(title="Zero-Coupon Curve",
+                      xaxis_title="Maturity (years)",
+                      yaxis_title="Rate (%)", **_LAYOUT)
+    return fig
+
+
+def plot_cashflows(cf_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=cf_df["t"], y=cf_df["cf_fix_received"],
+        name="Fixed received (MM → Investor)", marker_color="#2ca02c",
+    ))
+    fig.add_trace(go.Bar(
+        x=cf_df["t"], y=cf_df["cf_flt_paid"],
+        name="Libor + S paid (Investor → MM)", marker_color="#d62728",
+    ))
+    fig.add_trace(go.Scatter(
+        x=cf_df["t"], y=cf_df["cf_net"],
+        name="Net cashflow", mode="lines+markers",
+        line=dict(color="black", dash="dot"),
+    ))
+    fig.update_layout(title="Swap Leg Cashflows (Investor View)",
+                      xaxis_title="Time (years)",
+                      yaxis_title="Cashflow",
+                      barmode="relative", **_LAYOUT)
+    return fig
+
+
+def plot_price_sensitivity(sens_df: pd.DataFrame, current_price: float) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=sens_df["dirty_price"], y=sens_df["spread_bps"],
+        mode="lines", name="ASW spread", line=dict(width=2.5),
+    ))
+    fig.add_vline(x=100, line_dash="dash", line_color="gray",
+                  annotation_text="Par (no upfront)")
+    fig.add_vline(x=current_price, line_dash="dot", line_color="blue",
+                  annotation_text="Current price")
+    fig.update_layout(title="ASW Spread vs Dirty Price",
+                      xaxis_title="Dirty price",
+                      yaxis_title="ASW spread (bps)", **_LAYOUT)
+    return fig
+
+
+def plot_maturity_sensitivity(sens_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=sens_df["maturity"], y=sens_df["spread_bps"],
+        mode="lines+markers", name="ASW spread", line=dict(width=2.5),
+    ))
+    fig.update_layout(title="ASW Spread vs Bond Maturity",
+                      xaxis_title="Maturity (years)",
+                      yaxis_title="ASW spread (bps)", **_LAYOUT)
+    return fig
+
+
+def plot_leg_decomposition(pv_fix: float, pv_libor: float,
+                            upfront: float, spread_pv: float) -> go.Figure:
+    fig = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=["relative", "relative", "relative", "total"],
+        x=["PV Fixed Leg", "-PV Libor Leg", "-Upfront", "PV Spread Leg"],
+        y=[pv_fix, -pv_libor, -upfront, spread_pv],
+        connector=dict(line=dict(color="gray")),
+    ))
+    fig.update_layout(title="Asset Swap Package Decomposition",
+                      yaxis_title="PV", **_LAYOUT)
+    return fig
+
+
+# =============================================================================
+# APP
+# =============================================================================
+
 st.set_page_config(
     page_title="Fixed Income Tool",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-
-# -- Main content --
 
 st.title("Asset Swap Pricer")
 
@@ -127,7 +392,6 @@ with tab1:
     zero_rates = (curve_df["rate (%)"] / 100.0).tolist()
     DF = build_discount_factor(tenors, zero_rates)
 
-    # MTM
     st.markdown("#### Mark to Market")
     mtm_c1, mtm_c2 = st.columns(2)
     enable_mtm = mtm_c1.checkbox("Enable MTM calculation", value=False,
@@ -143,7 +407,6 @@ with tab1:
             step=1.0, key=f"pr_mkt_{pr_rc}",
         )
 
-    # -- Pricing Results --
     st.markdown("---")
     st.markdown("#### Pricing Results")
 
@@ -180,7 +443,6 @@ with tab1:
         m1.metric("MTM (% of par)", f"{mtm_per100:+.4f}")
         m2.metric("MTM (notional units)", f"{mtm_total:+,.2f}")
 
-    # Decomposition waterfall
     st.markdown("---")
     st.markdown("#### Package Decomposition")
     spread_pv = (report["fair_spread_bps"] / 1e4) * report["floating_annuity"] * 100.0
@@ -359,13 +621,11 @@ with tab3:
     st.markdown("---")
 
     try:
-        # Compute spread
         spread = par_asw_spread(
             cf_coupon, cf_maturity, cf_dirty,
             cf_fix_freq, cf_flt_freq, cf_DF,
         )
 
-        # Charts
         ch1, ch2 = st.columns(2)
         with ch1:
             dense_curve = curve_dataframe(cf_tenors, cf_rates)
@@ -381,7 +641,6 @@ with tab3:
             )
             st.plotly_chart(plot_cashflows(cf_df), width="stretch")
 
-        # Cashflow detail table
         st.markdown("#### Cashflow Detail")
         cf_display = pd.DataFrame({
             "t (years)": [f"{t:.4f}" for t in cf_df["t"]],

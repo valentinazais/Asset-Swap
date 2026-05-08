@@ -31,10 +31,30 @@ def disc(r, T, freq):
 
 
 def dirty(c, T, y, F=100.0, freq=2):
+    """
+    Pricing avec accrétion de coupon sur période stub.
+    """
     t, df = disc(y, T, freq)
-    cf    = np.full(len(t), c / freq * F)
+    
+    # Nombre de coupons complets
+    n_full = int(np.floor(T * freq))
+    
+    # Tous les coupons réguliers = coupon complet
+    cf = np.full(len(t), c / freq * F)
+    
+    # Si T n'est pas un coupon exact, le DERNIER flux est partiel
+    # Durée de la stub = T - (n_full / freq)
+    stub_duration = T - (n_full / freq)
+    
+    # Accrual sur stub = coupon complet × (stub_duration × freq)
+    if stub_duration > 1e-12:
+        cf[-1] = (c / freq * F) * (stub_duration * freq)  # ← coupon proportionnel
+    
+    # Principal payé SEULEMENT au flux final exact (T)
     cf[-1] += F
+    
     return float(np.dot(cf, df))
+
 
 def par_asw(c, T, y, r, F=100.0, freq=2):
     t, df_rf = disc(r, T, freq)

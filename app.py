@@ -404,8 +404,6 @@ try:
     )
     
     # ── LAYOUT: 3 COLUMNS ─────────────────────────────────────────────────────
-    
-    st.markdown("#### 1. Fundamentals")
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         st.plotly_chart(fig1, use_container_width=True, key="fig1")
@@ -414,7 +412,6 @@ try:
     with col_c:
         st.plotly_chart(fig3, use_container_width=True, key="fig3")
     
-    st.markdown("#### 2. Risk Metrics")
     col_d, col_e, col_f = st.columns(3)
     with col_d:
         st.plotly_chart(fig4, use_container_width=True, key="fig4")

@@ -8,8 +8,8 @@ from scipy.optimize import brentq
 st.set_page_config(page_title="Asset Swap", layout="wide", initial_sidebar_state="collapsed")
 
 DARK   = "plotly_dark"
-MARGIN = dict(t=50, b=50, l=55, r=55)
-H      = 370
+MARGIN = dict(t=40, b=40, l=50, r=40)
+H      = 420
 CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
 
 # ── CONVENTIONS ───────────────────────────────────────────────────────────────
@@ -17,34 +17,19 @@ CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
 # Coupons: paid at t = k/freq for k = 1, 2, ..., n_coupons, then maturity T
 # Stub: SHORT STUB — if T is not at coupon date, accrued coupon from last coupon to T
 # Settlement: t=0, no accrued interest adjustment
-# Rates: input as % (e.g., 5.5), stored internally as decimal (0.055)
 
 # ── MATH ──────────────────────────────────────────────────────────────────────
 
 def discount_factors(rate: float, T: float, freq: int) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Generate cash flow dates and corresponding discount factors.
-    
-    Args:
-        rate: annual spot rate (decimal, e.g., 0.05 for 5%)
-        T: maturity in years
-        freq: coupon frequency (1=annual, 2=semi, 4=quarterly)
-    
-    Returns:
-        t: array of all cash flow dates [1/freq, 2/freq, ..., T]
-        df: discount factors [exp(-rate * t_i)] using continuous compounding
-    """
-    # All coupon dates k/freq where k = 1, 2, ..., n_coupons
+    """Generate coupon dates and discount factors."""
     n_coupons = int(np.floor(T * freq))
     t_coupons = np.array([k / freq for k in range(1, n_coupons + 1)])
     
-    # Always include maturity date T
     if T > t_coupons[-1] + 1e-12:
         t = np.append(t_coupons, T)
     else:
         t = t_coupons
     
-    # Remove duplicates at machine precision
     t = np.unique(np.round(t, 12))
     df = np.exp(-rate * t)
     
@@ -52,23 +37,7 @@ def discount_factors(rate: float, T: float, freq: int) -> tuple[np.ndarray, np.n
 
 
 def cashflows(coupon: float, T: float, F: float, freq: int) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Build coupon and principal cash flows.
-    
-    Coupon dates: k/freq for k = 1, 2, ..., n_coupons
-    - If T == n_coupons/freq: last coupon is full, no stub
-    - If T > n_coupons/freq: last coupon is accrued from n_coupons/freq to T
-    
-    Args:
-        coupon: annual coupon rate (decimal)
-        T: maturity in years
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        t: cash flow dates
-        cf: cash flow amounts
-    """
+    """Build coupon and principal cash flows."""
     t, _ = discount_factors(0, T, freq)
     n_coupons = int(np.floor(T * freq))
     coupon_period = 1 / freq
@@ -76,16 +45,12 @@ def cashflows(coupon: float, T: float, F: float, freq: int) -> tuple[np.ndarray,
     
     cf = np.zeros(len(t))
     
-    # Regular full coupons at coupon dates (not including terminal date)
     for i in range(min(n_coupons, len(t) - 1)):
         cf[i] = coupon * coupon_period * F
     
-    # Terminal cash flow: coupon (full or stub) + principal at maturity T
     if abs(T - last_coupon_date) < 1e-12:
-        # T is exactly at a coupon date → full final coupon
         cf[-1] = coupon * coupon_period * F + F
     else:
-        # T is between coupon dates (short stub) → accrued coupon
         stub_years = T - last_coupon_date
         stub_frac = stub_years * freq
         cf[-1] = coupon * stub_frac * coupon_period * F + F
@@ -94,79 +59,26 @@ def cashflows(coupon: float, T: float, F: float, freq: int) -> tuple[np.ndarray,
 
 
 def price_dirty(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate dirty bond price (including accrued interest).
-    
-    Args:
-        coupon: annual coupon rate (decimal)
-        T: time to maturity in years
-        ytm: yield to maturity (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        Dirty price as % of face value
-    """
+    """Calculate dirty bond price."""
     t, cf = cashflows(coupon, T, F, freq)
     df = np.exp(-ytm * t)
     return float(np.dot(cf, df))
 
 
 def annuity_factor(ytm: float, T: float, freq: int) -> float:
-    """
-    Calculate annuity factor: sum of discount factors at coupon dates (not maturity).
-    
-    Used for par ASW calculations.
-    
-    Args:
-        ytm: yield (decimal)
-        T: maturity (years)
-        freq: coupon frequency
-    
-    Returns:
-        Annuity factor (dimensionless)
-    """
+    """Calculate annuity factor."""
     n_coupons = int(np.floor(T * freq))
     coupon_period = 1 / freq
-    
-    # Discount factors at coupon dates only (k/freq for k=1..n_coupons)
     t_coupons = np.array([k / freq for k in range(1, n_coupons + 1)])
     df_coupons = np.exp(-ytm * t_coupons)
-    
-    # Sum of discounted period lengths
     return float(np.sum(df_coupons * coupon_period))
 
 
 def par_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate par asset swap spread (parallel shift to risk-free curve).
-    
-    Par ASW is the constant spread s such that swapping bond coupons for
-    risk-free + s produces zero mark-to-market.
-    
-    Formula:
-        s = (coupon * Ann(ytm) + DF_T(rf) - P(ytm)) / Ann(rf) * 10000 bps
-    
-    Args:
-        coupon: annual coupon (decimal)
-        T: maturity (years)
-        ytm: bond yield (decimal)
-        rf: risk-free rate (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        Par ASW in basis points
-    """
+    """Calculate par asset swap spread."""
     P = price_dirty(coupon, T, ytm, F, freq) / F
-    
     ann_ytm = annuity_factor(ytm, T, freq)
     ann_rf = annuity_factor(rf, T, freq)
-    
-    # Discount factor at maturity under risk-free curve
-    t_terminal = int(np.floor(T * freq)) / freq
-    if T > t_terminal + 1e-12:
-        t_terminal = T
     df_terminal = np.exp(-rf * T)
     
     if ann_rf < 1e-12:
@@ -177,22 +89,7 @@ def par_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, fr
 
 
 def z_spread(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate Z-spread (constant spread over entire risk-free curve).
-    
-    Solves: P = sum_i CF_i * exp(-(rf + z_spread) * t_i)
-    
-    Args:
-        coupon: annual coupon (decimal)
-        T: maturity (years)
-        ytm: bond yield (decimal)
-        rf: risk-free rate (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        Z-spread in basis points
-    """
+    """Calculate Z-spread."""
     P = price_dirty(coupon, T, ytm, F, freq)
     t, cf = cashflows(coupon, T, F, freq)
     
@@ -208,51 +105,18 @@ def z_spread(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, f
 
 
 def yield_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate yield ASW (simple difference).
-    
-    Returns:
-        ytm - rf in basis points
-    """
+    """Calculate yield ASW."""
     return float((ytm - rf) * 1e4)
 
 
 def soulte(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate soulte (cash adjustment at trade initiation).
-    
-    Soulte = Dirty_Price - Par (for par ASW).
-    
-    Args:
-        coupon: annual coupon (decimal)
-        T: maturity (years)
-        ytm: bond yield (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        Soulte as % of face value
-    """
+    """Calculate soulte."""
     P = price_dirty(coupon, T, ytm, F, freq)
     return float(P - F)
 
 
 def macaulay_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate Macaulay duration.
-    
-    D_mac = (sum_i t_i * CF_i * DF_i) / P
-    
-    Args:
-        coupon: annual coupon (decimal)
-        T: maturity (years)
-        ytm: bond yield (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        Macaulay duration in years
-    """
+    """Calculate Macaulay duration."""
     t, cf = cashflows(coupon, T, F, freq)
     df = np.exp(-ytm * t)
     P = float(np.dot(cf, df))
@@ -265,24 +129,7 @@ def macaulay_duration(coupon: float, T: float, ytm: float, F: float = 100.0, fre
 
 
 def modified_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate modified duration (price sensitivity).
-    
-    D_mod = D_mac / (1 + ytm / freq)
-    
-    For annual compounding (freq=1): D_mod = D_mac / (1 + ytm)
-    For semi-annual (freq=2): D_mod = D_mac / (1 + ytm/2)
-    
-    Args:
-        coupon: annual coupon (decimal)
-        T: maturity (years)
-        ytm: bond yield (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        Modified duration in years
-    """
+    """Calculate modified duration."""
     D_mac = macaulay_duration(coupon, T, ytm, F, freq)
     
     if np.isnan(D_mac):
@@ -292,21 +139,7 @@ def modified_duration(coupon: float, T: float, ytm: float, F: float = 100.0, fre
 
 
 def dv01(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """
-    Calculate DV01 (dollar value of 1 basis point move).
-    
-    DV01 = Mod_Duration * Price * 0.0001
-    
-    Args:
-        coupon: annual coupon (decimal)
-        T: maturity (years)
-        ytm: bond yield (decimal)
-        F: face value
-        freq: coupon frequency
-    
-    Returns:
-        DV01 in currency units (per 100 of face)
-    """
+    """Calculate DV01."""
     P = price_dirty(coupon, T, ytm, F, freq)
     MD = modified_duration(coupon, T, ytm, F, freq)
     
@@ -318,49 +151,52 @@ def dv01(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -
 
 # ── STREAMLIT INTERFACE ───────────────────────────────────────────────────────
 
-st.markdown(
-    """<style>
-    h1 { font-size: 28px; margin-bottom: 20px; }
-    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
-    </style>""",
-    unsafe_allow_html=True
-)
+st.markdown("""
+    <style>
+    h1 { font-size: 28px; margin-bottom: 15px; }
+    [data-testid="metric-container"] {
+        background-color: rgba(28, 35, 45, 0.8);
+        padding: 12px 15px;
+        border-radius: 8px;
+        border-left: 3px solid #00b4d8;
+    }
+    [data-testid="metric-container"] > div:first-child { font-size: 11px; color: #888; }
+    [data-testid="metric-container"] > div:last-child { font-size: 18px; font-weight: bold; }
+    </style>
+""", unsafe_allow_html=True)
 
 st.title("Asset Swap Pricer")
 
-# ── INPUT CONTROLS ────────────────────────────────────────────────────────────
+# ── INPUT SLIDERS ─────────────────────────────────────────────────────────────
 
-col_face, col_coupon, col_mat, col_freq, col_ytm, col_rf = st.columns(6)
+col1, col2, col3, col4, col5, col6 = st.columns(6, gap="small")
 
-with col_face:
-    face = st.number_input("Face", value=100.0, min_value=1.0, step=1.0)
+with col1:
+    face = st.slider("Face", 50.0, 500.0, 100.0, 1.0, key="face_slider", format="%.1f")
 
-with col_coupon:
-    coupon_pct = st.number_input("Coupon (%)", value=6.50, min_value=0.0, step=0.05)
+with col2:
+    coupon_pct = st.slider("Coupon (%)", 0.5, 15.0, 6.5, 0.05, key="coupon_slider", format="%.2f")
     coupon = coupon_pct / 100
 
-with col_mat:
-    mat = st.number_input("Maturity (yr)", value=7.0, min_value=0.01, step=0.25)
+with col3:
+    mat = st.slider("Maturity (yr)", 0.5, 30.0, 7.0, 0.25, key="mat_slider", format="%.2f")
 
-with col_freq:
-    freq_label = st.selectbox("Freq", ["Annual", "Semi", "Quarterly"], index=1)
+with col4:
+    freq_label = st.selectbox("Freq", ["Annual", "Semi", "Quarterly"], index=1, key="freq_select")
     freq_map = {"Annual": 1, "Semi": 2, "Quarterly": 4}
     freq = freq_map[freq_label]
 
-with col_ytm:
-    ytm_pct = st.number_input("YTM (%)", value=8.00, min_value=0.01, step=0.05)
+with col5:
+    ytm_pct = st.slider("YTM (%)", 0.5, 20.0, 8.0, 0.05, key="ytm_slider", format="%.2f")
     ytm = ytm_pct / 100
 
-with col_rf:
-    rf_pct = st.number_input("Risk-Free (%)", value=3.00, min_value=0.01, step=0.05)
+with col6:
+    rf_pct = st.slider("Risk-Free (%)", 0.1, 15.0, 3.0, 0.05, key="rf_slider", format="%.2f")
     rf = rf_pct / 100
-
-if st.button("Reset", key="reset"):
-    st.rerun()
 
 st.divider()
 
-# ── CALCULATIONS ──────────────────────────────────────────────────────────────
+# ── CALCULATIONS & DISPLAY ────────────────────────────────────────────────────
 
 try:
     P = price_dirty(coupon, mat, ytm, face, freq) / face * 100
@@ -372,203 +208,152 @@ try:
     dv01_val = dv01(coupon, mat, ytm, face, freq)
     ann = annuity_factor(ytm, mat, freq)
     
-    # Display metrics
-    metric_cols = st.columns(9)
-    metrics = [
-        ("Dirty Price", f"{P:.4f}", None),
-        ("Soulte", f"{slt:.4f}", None),
-        ("Par ASW (bps)", f"{par_asw_val:.2f}", None),
-        ("Z-Spread (bps)", f"{z_sp:.2f}", None),
-        ("Yield ASW (bps)", f"{y_asw:.2f}", None),
-        ("Mod. Duration", f"{md:.4f}", None),
-        ("DV01", f"{dv01_val:.6f}", None),
-        ("Annuity", f"{ann:.7f}", None),
-    ]
+    # ── METRICS ROW ───────────────────────────────────────────────────────────
     
-    for i, (label, value, unit) in enumerate(metrics):
-        with metric_cols[i]:
-            st.metric(label, value)
+    m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8, gap="small")
+    
+    with m1:
+        st.metric("Dirty Price", f"{P:.4f}")
+    with m2:
+        st.metric("Soulte", f"{slt:.4f}")
+    with m3:
+        st.metric("Par ASW", f"{par_asw_val:.2f} bps")
+    with m4:
+        st.metric("Z-Spread", f"{z_sp:.2f} bps")
+    with m5:
+        st.metric("Yield ASW", f"{y_asw:.2f} bps")
+    with m6:
+        st.metric("Mod. Duration", f"{md:.4f} yr")
+    with m7:
+        st.metric("DV01", f"{dv01_val:.6f}")
+    with m8:
+        st.metric("Annuity", f"{ann:.6f}")
     
     st.divider()
     
-    # ── FIGURE 1: Price vs YTM ────────────────────────────────────────────────
+    # ── GRAPH GENERATION ──────────────────────────────────────────────────────
     
-    ytm_grid = np.linspace(0.002, 0.15, 100)
+    ytm_grid = np.linspace(max(0.002, ytm - 0.08), min(0.25, ytm + 0.12), 120)
+    mat_grid = np.linspace(0.5, 30.0, 60)
+    
+    # Pre-calculate common arrays
     prices = [price_dirty(coupon, mat, y, face, freq) / face * 100 for y in ytm_grid]
+    par_asws = [par_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    z_spreads = [z_spread(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    y_asws = [yield_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    soultes = [soulte(coupon, mat, y, face, freq) for y in ytm_grid]
+    durations = [modified_duration(coupon, mat, y, face, freq) for y in ytm_grid]
+    dv01s = [dv01(coupon, mat, y, face, freq) for y in ytm_grid]
+    
+    # ── FIGURE 1: Bond Price vs YTM ───────────────────────────────────────────
     
     fig1 = go.Figure()
-    fig1.add_scatter(
-        x=ytm_grid*100, y=prices, mode="lines",
-        name="Bond Price", line=dict(color=CA, width=2)
-    )
-    fig1.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, annotation_text="YTM")
-    fig1.update_layout(
-        template=DARK, height=H, margin=MARGIN,
-        title="Bond Price vs YTM",
-        xaxis_title="YTM (%)",
-        yaxis_title="Price (% face)",
-        hovermode="x unified"
-    )
+    fig1.add_scatter(x=ytm_grid*100, y=prices, mode="lines", name="Bond Price",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.2f}<extra></extra>")
+    fig1.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig1.update_layout(template=DARK, height=H, margin=MARGIN, title="Bond Price vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Price (%)", hovermode="x unified", showlegend=False)
     
     # ── FIGURE 2: Par ASW vs YTM ──────────────────────────────────────────────
     
-    par_asws = [par_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
-    
     fig2 = go.Figure()
-    fig2.add_scatter(
-        x=ytm_grid*100, y=par_asws, mode="lines",
-        name="Par ASW", line=dict(color=CA, width=2)
-    )
-    fig2.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, annotation_text="YTM")
-    fig2.update_layout(
-        template=DARK, height=H, margin=MARGIN,
-        title="Par ASW vs YTM",
-        xaxis_title="YTM (%)",
-        yaxis_title="Par ASW (bps)",
-        hovermode="x unified"
-    )
+    fig2.add_scatter(x=ytm_grid*100, y=par_asws, mode="lines", name="Par ASW",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>")
+    fig2.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig2.update_layout(template=DARK, height=H, margin=MARGIN, title="Par ASW vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Par ASW (bps)", hovermode="x unified", showlegend=False)
     
-    # ── FIGURE 3: Z-Spread vs YTM ─────────────────────────────────────────────
-    
-    z_spreads = [z_spread(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    # ── FIGURE 3: Soulte vs YTM ───────────────────────────────────────────────
     
     fig3 = go.Figure()
-    fig3.add_scatter(
-        x=ytm_grid*100, y=z_spreads, mode="lines",
-        name="Z-Spread", line=dict(color=CC, width=2)
-    )
-    fig3.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, annotation_text="YTM")
-    fig3.update_layout(
-        template=DARK, height=H, margin=MARGIN,
-        title="Z-Spread vs YTM",
-        xaxis_title="YTM (%)",
-        yaxis_title="Z-Spread (bps)",
-        hovermode="x unified"
-    )
+    fig3.add_scatter(x=ytm_grid*100, y=soultes, mode="lines", name="Soulte",
+                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f}<extra></extra>")
+    fig3.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, annotation_text="At Par", annotation_position="right")
+    fig3.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig3.update_layout(template=DARK, height=H, margin=MARGIN, title="Soulte vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Soulte (price)", hovermode="x unified", showlegend=False)
     
-    # ── FIGURE 4: Spread Conventions Comparison ────────────────────────────────
-    
-    par_asws_cmp = [par_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
-    z_spreads_cmp = [z_spread(coupon, mat, y, rf, face, freq) for y in ytm_grid]
-    y_asws_cmp = [yield_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    # ── FIGURE 4: Z-Spread vs YTM ─────────────────────────────────────────────
     
     fig4 = go.Figure()
-    fig4.add_scatter(
-        x=ytm_grid*100, y=par_asws_cmp, mode="lines",
-        name="Par ASW", line=dict(color=CA, width=2)
-    )
-    fig4.add_scatter(
-        x=ytm_grid*100, y=z_spreads_cmp, mode="lines",
-        name="Z-Spread", line=dict(color=CB, width=2, dash="dash")
-    )
-    fig4.add_scatter(
-        x=ytm_grid*100, y=y_asws_cmp, mode="lines",
-        name="Yield ASW", line=dict(color=CC, width=2, dash="dot")
-    )
-    fig4.add_vline(x=ytm_pct, line_dash="dash", line_color="gray")
-    fig4.update_layout(
-        template=DARK, height=H, margin=MARGIN,
-        title="Spread Conventions vs YTM",
-        xaxis_title="YTM (%)",
-        yaxis_title="Spread (bps)",
-        hovermode="x unified"
-    )
+    fig4.add_scatter(x=ytm_grid*100, y=z_spreads, mode="lines", name="Z-Spread",
+                     line=dict(color=CB, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>")
+    fig4.add_vline(x=ytm_pct, line_dash="dash", line_color=CA, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig4.update_layout(template=DARK, height=H, margin=MARGIN, title="Z-Spread vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Z-Spread (bps)", hovermode="x unified", showlegend=False)
     
-    # ── FIGURE 5: Soulte vs YTM ───────────────────────────────────────────────
-    
-    soultes = [soulte(coupon, mat, y, face, freq) for y in ytm_grid]
+    # ── FIGURE 5: Modified Duration vs YTM ────────────────────────────────────
     
     fig5 = go.Figure()
-    fig5.add_scatter(
-        x=ytm_grid*100, y=soultes, mode="lines",
-        name="Soulte", line=dict(color=CB, width=2)
-    )
-    fig5.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="At Par")
-    fig5.add_vline(x=ytm_pct, line_dash="dash", line_color="gray", annotation_text="YTM")
-    fig5.update_layout(
-        template=DARK, height=H, margin=MARGIN,
-        title="Soulte vs YTM (zero at par)",
-        xaxis_title="YTM (%)",
-        yaxis_title="Soulte (price)",
-        hovermode="x unified"
-    )
+    fig5.add_scatter(x=ytm_grid*100, y=durations, mode="lines", name="Mod. Duration",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f} yr<extra></extra>")
+    fig5.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig5.update_layout(template=DARK, height=H, margin=MARGIN, title="Modified Duration vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Duration (yr)", hovermode="x unified", showlegend=False)
     
-    # ── FIGURE 6: Duration & DV01 ─────────────────────────────────────────────
+    # ── FIGURE 6: DV01 vs YTM ─────────────────────────────────────────────────
     
-    md_grid = [modified_duration(coupon, mat, y, face, freq) for y in ytm_grid]
-    dv01_grid = [dv01(coupon, mat, y, face, freq) for y in ytm_grid]
+    fig6 = go.Figure()
+    fig6.add_scatter(x=ytm_grid*100, y=dv01s, mode="lines", name="DV01",
+                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.6f}<extra></extra>")
+    fig6.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig6.update_layout(template=DARK, height=H, margin=MARGIN, title="DV01 vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="DV01", hovermode="x unified", showlegend=False)
     
-    fig6 = make_subplots(specs=[[{"secondary_y": True}]])
-    fig6.add_scatter(
-        x=ytm_grid*100, y=md_grid, name="Mod. Duration",
-        line=dict(color=CA, width=2), secondary_y=False
-    )
-    fig6.add_scatter(
-        x=ytm_grid*100, y=dv01_grid, name="DV01",
-        line=dict(color=CC, width=2, dash="dash"), secondary_y=True
-    )
-    fig6.add_vline(x=ytm_pct, line_dash="dash", line_color="gray")
-    fig6.update_layout(
-        template=DARK, height=H, margin=MARGIN,
-        title="Duration & DV01 vs YTM",
-        hovermode="x unified"
-    )
-    fig6.update_xaxes(title_text="YTM (%)")
-    fig6.update_yaxes(title_text="Mod. Duration", secondary_y=False)
-    fig6.update_yaxes(title_text="DV01", secondary_y=True)
+    # ── FIGURE 7: Par ASW Surface (Maturity × YTM) ────────────────────────────
     
-    # ── FIGURE 7: Par ASW Surface (Maturity × YTM) ─────────────────────────────
-    
-    @st.cache_data(show_spinner=False)
+    @st.cache_data(show_spinner=False, ttl=3600)
     def _surface(c, r_, F, freq_):
-        mats_ = np.linspace(0.5, 15, 40)
-        ytms_ = np.linspace(max(0.002, r_ - 0.02), r_ + 0.15, 40)
         Z = np.array([
-            [par_asw(c, m_, y_, r_, F, freq_) for y_ in ytms_]
-            for m_ in mats_
+            [par_asw(c, m_, y_, r_, F, freq_) for y_ in ytm_grid]
+            for m_ in mat_grid
         ])
-        return mats_, ytms_, Z
+        return mat_grid, ytm_grid, Z
     
     mats_s, ytms_s, Z_s = _surface(coupon, rf, face, freq)
     
     fig7 = go.Figure(go.Surface(
         x=ytms_s*100, y=mats_s, z=Z_s,
         colorscale="Viridis",
-        colorbar=dict(title="Par ASW (bps)", thickness=15, len=0.7)
+        colorbar=dict(title="Par ASW<br>(bps)", thickness=12, len=0.7, tickfont=dict(size=9))
     ))
     fig7.update_layout(
         scene=dict(
-            xaxis=dict(title="YTM (%)", tickfont=dict(size=10)),
-            yaxis=dict(title="Maturity (yr)", tickfont=dict(size=10)),
-            zaxis=dict(title="Par ASW (bps)", tickfont=dict(size=10)),
+            xaxis=dict(title="YTM (%)", tickfont=dict(size=9)),
+            yaxis=dict(title="Maturity (yr)", tickfont=dict(size=9)),
+            zaxis=dict(title="Par ASW (bps)", tickfont=dict(size=9)),
             camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
         ),
         title="Par ASW Surface — Maturity × YTM",
         template=DARK,
-        height=H,
-        margin=dict(t=50, b=10, l=10, r=10)
+        height=H + 50,
+        margin=dict(t=40, b=10, l=10, r=10)
     )
     
-    # ── LAYOUT: 2×4 GRID ──────────────────────────────────────────────────────
+    # ── LAYOUT: 3 COLUMNS ─────────────────────────────────────────────────────
     
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+    st.markdown("#### 1. Fundamentals")
+    col_a, col_b, col_c = st.columns(3, gap="medium")
+    with col_a:
         st.plotly_chart(fig1, use_container_width=True, key="fig1")
-    with col2:
+    with col_b:
         st.plotly_chart(fig2, use_container_width=True, key="fig2")
-    with col3:
+    with col_c:
         st.plotly_chart(fig3, use_container_width=True, key="fig3")
-    with col4:
-        st.plotly_chart(fig4, use_container_width=True, key="fig4")
     
-    col5, col6, col7 = st.columns(3)
-    with col5:
+    st.markdown("#### 2. Risk Metrics")
+    col_d, col_e, col_f = st.columns(3, gap="medium")
+    with col_d:
+        st.plotly_chart(fig4, use_container_width=True, key="fig4")
+    with col_e:
         st.plotly_chart(fig5, use_container_width=True, key="fig5")
-    with col6:
+    with col_f:
         st.plotly_chart(fig6, use_container_width=True, key="fig6")
-    with col7:
-        st.plotly_chart(fig7, use_container_width=True, key="fig7")
+    
+    st.markdown("#### 3. Multi-Factor Surface")
+    st.plotly_chart(fig7, use_container_width=True, key="fig7")
 
 except Exception as e:
     st.error(f"**Calculation Error:** {str(e)}")
-    st.stop()
+    import traceback
+    st.text(traceback.format_exc())

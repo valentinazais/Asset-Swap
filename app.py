@@ -282,11 +282,11 @@ try:
     with m2:
         st.metric("Soulte", f"{slt:.4f}")
     with m3:
-        st.metric("Par ASW", f"{par_asw_val:.2f} bps")
+        st.metric("Par ASW (bps)", f"{par_asw_val:.2f}")
     with m4:
-        st.metric("Z-Spread", f"{z_sp:.2f} bps")
+        st.metric("Z-Spread (bps)", f"{z_sp:.2f}")
     with m5:
-        st.metric("Yield ASW", f"{y_asw:.2f} bps")
+        st.metric("Yield ASW (bps)", f"{y_asw:.2f}")
     with m6:
         st.metric("Mod. Duration", f"{md:.4f} yr")
     with m7:

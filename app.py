@@ -178,73 +178,73 @@ if "freq_label" not in st.session_state:
 
 # ── INPUT CONTROLS ────────────────────────────────────────────────────────────
 
-col1, col2, col3, col4, col5, col6 = st.columns(6, gap="small")
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 # FACE
 with col1:
     st.markdown('<div class="input-label">Face</div>', unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
-        if st.button("−", key="face_minus", use_container_width=True):
+        if st.button("−", key="face_minus"):
             st.session_state.face = max(50.0, st.session_state.face - 5.0)
     with btn_col2:
-        if st.button("+", key="face_plus", use_container_width=True):
+        if st.button("+", key="face_plus"):
             st.session_state.face = min(500.0, st.session_state.face + 5.0)
-    st.session_state.face = st.slider("##face", 50.0, 500.0, st.session_state.face, 1.0, key="face_slider", label_visibility="collapsed")
+    st.session_state.face = st.slider("##face", 50.0, 500.0, st.session_state.face, 1.0, label_visibility="collapsed")
 
 # COUPON
 with col2:
     st.markdown('<div class="input-label">Coupon (%)</div>', unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
-        if st.button("−", key="coupon_minus", use_container_width=True):
+        if st.button("−", key="coupon_minus"):
             st.session_state.coupon_pct = max(0.5, st.session_state.coupon_pct - 0.25)
     with btn_col2:
-        if st.button("+", key="coupon_plus", use_container_width=True):
+        if st.button("+", key="coupon_plus"):
             st.session_state.coupon_pct = min(15.0, st.session_state.coupon_pct + 0.25)
-    st.session_state.coupon_pct = st.slider("##coupon", 0.5, 15.0, st.session_state.coupon_pct, 0.05, key="coupon_slider", label_visibility="collapsed")
+    st.session_state.coupon_pct = st.slider("##coupon", 0.5, 15.0, st.session_state.coupon_pct, 0.05, label_visibility="collapsed")
 
 # MATURITY
 with col3:
     st.markdown('<div class="input-label">Maturity (yr)</div>', unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
-        if st.button("−", key="mat_minus", use_container_width=True):
+        if st.button("−", key="mat_minus"):
             st.session_state.mat = max(0.5, st.session_state.mat - 0.5)
     with btn_col2:
-        if st.button("+", key="mat_plus", use_container_width=True):
+        if st.button("+", key="mat_plus"):
             st.session_state.mat = min(30.0, st.session_state.mat + 0.5)
-    st.session_state.mat = st.slider("##mat", 0.5, 30.0, st.session_state.mat, 0.25, key="mat_slider", label_visibility="collapsed")
+    st.session_state.mat = st.slider("##mat", 0.5, 30.0, st.session_state.mat, 0.25, label_visibility="collapsed")
 
 # FREQUENCY
 with col4:
     st.markdown('<div class="input-label">Freq</div>', unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
-    st.session_state.freq_label = st.selectbox("##freq", ["Annual", "Semi", "Quarterly"], index=["Annual", "Semi", "Quarterly"].index(st.session_state.freq_label), key="freq_select", label_visibility="collapsed")
+    st.session_state.freq_label = st.selectbox("##freq", ["Annual", "Semi", "Quarterly"], index=["Annual", "Semi", "Quarterly"].index(st.session_state.freq_label), label_visibility="collapsed")
 
 # YTM
 with col5:
     st.markdown('<div class="input-label">YTM (%)</div>', unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
-        if st.button("−", key="ytm_minus", use_container_width=True):
+        if st.button("−", key="ytm_minus"):
             st.session_state.ytm_pct = max(0.5, st.session_state.ytm_pct - 0.25)
     with btn_col2:
-        if st.button("+", key="ytm_plus", use_container_width=True):
+        if st.button("+", key="ytm_plus"):
             st.session_state.ytm_pct = min(20.0, st.session_state.ytm_pct + 0.25)
-    st.session_state.ytm_pct = st.slider("##ytm", 0.5, 20.0, st.session_state.ytm_pct, 0.05, key="ytm_slider", label_visibility="collapsed")
+    st.session_state.ytm_pct = st.slider("##ytm", 0.5, 20.0, st.session_state.ytm_pct, 0.05, label_visibility="collapsed")
 
 # RISK-FREE
 with col6:
     st.markdown('<div class="input-label">Risk-Free (%)</div>', unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
-        if st.button("−", key="rf_minus", use_container_width=True):
+        if st.button("−", key="rf_minus"):
             st.session_state.rf_pct = max(0.1, st.session_state.rf_pct - 0.25)
     with btn_col2:
-        if st.button("+", key="rf_plus", use_container_width=True):
+        if st.button("+", key="rf_plus"):
             st.session_state.rf_pct = min(15.0, st.session_state.rf_pct + 0.25)
-    st.session_state.rf_pct = st.slider("##rf", 0.1, 15.0, st.session_state.rf_pct, 0.05, key="rf_slider", label_visibility="collapsed")
+    st.session_state.rf_pct = st.slider("##rf", 0.1, 15.0, st.session_state.rf_pct, 0.05, label_visibility="collapsed")
 
 st.divider()
 
@@ -275,7 +275,7 @@ try:
     
     # ── METRICS ROW ───────────────────────────────────────────────────────────
     
-    m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8, gap="small")
+    m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
     
     with m1:
         st.metric("Dirty Price", f"{P:.4f}")
@@ -410,7 +410,7 @@ try:
     # ── LAYOUT: 3 COLUMNS ─────────────────────────────────────────────────────
     
     st.markdown("#### 1. Fundamentals")
-    col_a, col_b, col_c = st.columns(3, gap="medium")
+    col_a, col_b, col_c = st.columns(3)
     with col_a:
         st.plotly_chart(fig1, use_container_width=True, key="fig1")
     with col_b:
@@ -419,7 +419,7 @@ try:
         st.plotly_chart(fig3, use_container_width=True, key="fig3")
     
     st.markdown("#### 2. Risk Metrics")
-    col_d, col_e, col_f = st.columns(3, gap="medium")
+    col_d, col_e, col_f = st.columns(3)
     with col_d:
         st.plotly_chart(fig4, use_container_width=True, key="fig4")
     with col_e:

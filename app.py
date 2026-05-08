@@ -1,5 +1,3 @@
-# run: streamlit run app.py
-
 from __future__ import annotations
 import numpy as np
 import streamlit as st
@@ -17,28 +15,37 @@ CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
 # ── MATH ──────────────────────────────────────────────────────────────────────
 
 def disc(r, T, freq):
-    n  = max(1, int(round(T * freq)))
-    t  = np.arange(1, n + 1) / freq
+    """
+    Retourne (t, df) où :
+      t  : dates des cash flows — la dernière vaut exactement T
+      df : facteurs d'actualisation exp(-r * t)
+    Correction : t[-1] = T exact, élimine la discontinuité due à l'arrondi.
+    """
+    n     = max(1, int(round(T * freq)))
+    t     = np.arange(1, n + 1) / freq
+    t[-1] = T                                        # FIX 1 : dernière date = T exact
     return t, np.exp(-r * t)
 
 def dirty(c, T, y, F=100.0, freq=2):
     t, df = disc(y, T, freq)
-    cf    = np.full(len(t), c / freq * F); cf[-1] += F
+    cf    = np.full(len(t), c / freq * F)
+    cf[-1] += F
     return float(np.dot(cf, df))
 
 def par_asw(c, T, y, r, F=100.0, freq=2):
     t, df_rf = disc(r, T, freq)
     ann = float(np.sum(df_rf / freq))
-    ZT  = np.exp(-r * T)
+    ZT  = float(df_rf[-1])                           # FIX 2 : cohérent avec disc()
     P   = dirty(c, T, y, F, freq) / F
     return float((c * ann + ZT - P) / ann * 1e4) if ann > 1e-12 else 0.0
 
 def z_spread(c, T, y, r, F=100.0, freq=2):
-    P = dirty(c, T, y, F, freq)
+    P        = dirty(c, T, y, F, freq)
+    t, _     = disc(r, T, freq)                      # FIX 3 : hors closure
+    cf       = np.full(len(t), c / freq * F)
+    cf[-1]  += F
     def pv(s):
-        t, _ = disc(r, T, freq)
-        df   = np.exp(-(r + s) * t)
-        cf   = np.full(len(t), c / freq * F); cf[-1] += F
+        df = np.exp(-(r + s) * t)
         return float(np.dot(cf, df)) - P
     try:
         return brentq(pv, -0.5, 5.0, xtol=1e-10) * 1e4
@@ -53,7 +60,8 @@ def soulte(c, T, y, F=100.0, freq=2):
 
 def mod_dur(c, T, y, F=100.0, freq=2):
     t, df = disc(y, T, freq)
-    cf    = np.full(len(t), c / freq * F); cf[-1] += F
+    cf    = np.full(len(t), c / freq * F)
+    cf[-1] += F
     P     = float(np.dot(cf, df))
     D_mac = float(np.dot(t * cf, df)) / P
     return D_mac / (1 + y / freq)
@@ -61,29 +69,29 @@ def mod_dur(c, T, y, F=100.0, freq=2):
 def dv01_fn(c, T, y, F=100.0, freq=2):
     return (dirty(c, T, y - 5e-5, F, freq) - dirty(c, T, y + 5e-5, F, freq)) / 2.0
 
-# ── CONTROLS ─────────────────────────────────────────────────────────────────
+# ── CONTROLS ──────────────────────────────────────────────────────────────────
 
 st.title("Asset Swap Pricer")
 
 c1, c2, c3, c4, c5, c6, c7 = st.columns([1.2, 1.2, 1.2, 1.4, 1.2, 1.2, 0.8])
 with c1:
-    face   = st.number_input("Face",        min_value=10.0,   max_value=10000.0, value=100.0,  step=10.0)
+    face   = st.number_input("Face",          min_value=10.0,  max_value=10000.0, value=100.0, step=10.0)
 with c2:
-    coupon = st.number_input("Coupon",      min_value=0.001,  max_value=0.30,    value=0.05,   step=0.005, format="%.3f")
+    coupon = st.number_input("Coupon",        min_value=0.001, max_value=0.30,    value=0.05,  step=0.005, format="%.3f")
 with c3:
-    mat    = st.number_input("Maturity (yr)", min_value=0.5,  max_value=30.0,    value=5.0,    step=0.5)
+    mat    = st.number_input("Maturity (yr)", min_value=0.5,   max_value=30.0,    value=5.0,   step=0.5)
 with c4:
     freq_label = st.selectbox("Freq", ["Annual", "Semi", "Quarterly"], index=1)
     freq = {"Annual": 1, "Semi": 2, "Quarterly": 4}[freq_label]
 with c5:
-    ytm    = st.number_input("YTM",         min_value=0.001,  max_value=0.30,    value=0.055,  step=0.005, format="%.3f")
+    ytm    = st.number_input("YTM",           min_value=0.001, max_value=0.30,    value=0.055, step=0.005, format="%.3f")
 with c6:
-    rf     = st.number_input("Risk-Free",   min_value=0.001,  max_value=0.25,    value=0.03,   step=0.005, format="%.3f")
+    rf     = st.number_input("Risk-Free",     min_value=0.001, max_value=0.25,    value=0.03,  step=0.005, format="%.3f")
 with c7:
     if st.button("Reset"):
         st.rerun()
 
-# ── METRICS ──────────────────────────────────────────────────────────────────
+# ── METRICS ───────────────────────────────────────────────────────────────────
 
 dp   = dirty(coupon, mat, ytm, face, freq)
 soul = soulte(coupon, mat, ytm, face, freq)
@@ -96,22 +104,21 @@ t_rf, df_rf = disc(rf, mat, freq)
 ann  = float(np.sum(df_rf / freq))
 
 m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
-m1.metric("Dirty Price",      f"{dp:.4f}")
-m2.metric("Soulte",           f"{soul:.4f}")
-m3.metric("Par ASW (bps)",    f"{pasw:.2f}")
-m4.metric("Z-Spread (bps)",   f"{zspr:.2f}")
-m5.metric("Yield ASW (bps)",  f"{yasw:.2f}")
-m6.metric("Mod. Duration",    f"{md:.4f}")
-m7.metric("DV01",             f"{dv:.6f}")
-m8.metric("Annuity",          f"{ann:.6f}")
+m1.metric("Dirty Price",     f"{dp:.4f}")
+m2.metric("Soulte",          f"{soul:.4f}")
+m3.metric("Par ASW (bps)",   f"{pasw:.2f}")
+m4.metric("Z-Spread (bps)",  f"{zspr:.2f}")
+m5.metric("Yield ASW (bps)", f"{yasw:.2f}")
+m6.metric("Mod. Duration",   f"{md:.4f}")
+m7.metric("DV01",            f"{dv:.6f}")
+m8.metric("Annuity",         f"{ann:.6f}")
 
 st.divider()
 
-# ── GRID PARAMS ──────────────────────────────────────────────────────────────
+# ── GRID PARAMS ───────────────────────────────────────────────────────────────
 
 ytm_grid = np.linspace(max(0.002, rf - 0.02), rf + 0.14, 120)
-rf_grid  = np.linspace(0.005, 0.10, 80)
-mat_grid = np.linspace(0.5, 20.0, 200)
+mat_grid = np.linspace(0.5, 20.0, 400)          # résolution doublée
 
 LEGEND = dict(orientation="h", y=1.06, x=0, font=dict(size=13))
 AXIS   = dict(tickfont=dict(size=12), title_font=dict(size=13))
@@ -124,11 +131,11 @@ def vline(fig, x, row=None, col=None):
     else:
         fig.add_shape(**kw)
 
-# ── GRAPH 1 : Spread Conventions vs YTM ─────────────────────────────────────
+# ── GRAPH 1 : Spread Conventions vs YTM ──────────────────────────────────────
 
-pasw_g  = [par_asw(coupon, mat, y, rf, face, freq)    for y in ytm_grid]
-zspr_g  = [z_spread(coupon, mat, y, rf, face, freq)   for y in ytm_grid]
-yasw_g  = [yield_asw(coupon, mat, y, rf, face, freq)  for y in ytm_grid]
+pasw_g = [par_asw(coupon, mat, y, rf, face, freq)   for y in ytm_grid]
+zspr_g = [z_spread(coupon, mat, y, rf, face, freq)  for y in ytm_grid]
+yasw_g = [yield_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
 
 fig1 = go.Figure()
 fig1.add_scatter(x=ytm_grid*100, y=pasw_g, name="Par ASW",   line=dict(color=CA, width=2))
@@ -141,7 +148,7 @@ fig1.update_layout(template=DARK, height=H, margin=MARGIN,
                    yaxis=dict(title="bps", **AXIS),
                    legend=LEGEND)
 
-# ── GRAPH 2 : Soulte vs YTM ──────────────────────────────────────────────────
+# ── GRAPH 2 : Soulte vs YTM ───────────────────────────────────────────────────
 
 soul_g = [soulte(coupon, mat, y, face, freq) for y in ytm_grid]
 
@@ -157,7 +164,7 @@ fig2.update_layout(template=DARK, height=H, margin=MARGIN,
                    xaxis=dict(title="YTM (%)", **AXIS),
                    yaxis=dict(title="Soulte", **AXIS))
 
-# ── GRAPH 3 : Par ASW Term Structure by Coupon ───────────────────────────────
+# ── GRAPH 3 : Par ASW Term Structure by Coupon ────────────────────────────────
 
 coupons_ts = [0.01, 0.03, 0.05, 0.08]
 colors_ts  = [CA, "#48cae4", CC, CB]
@@ -174,9 +181,9 @@ fig3.update_layout(template=DARK, height=H, margin=MARGIN,
                    yaxis=dict(title="Par ASW (bps)", **AXIS),
                    legend=LEGEND)
 
-# ── GRAPH 4 : Gap (Par ASW − Z-Spread) + Soulte ─────────────────────────────
+# ── GRAPH 4 : Gap (Par ASW − Z-Spread) + Soulte ──────────────────────────────
 
-gap_g  = [p - z for p, z in zip(pasw_g, zspr_g)]
+gap_g = [p - z for p, z in zip(pasw_g, zspr_g)]
 
 fig4 = make_subplots(specs=[[{"secondary_y": True}]])
 fig4.add_scatter(x=ytm_grid*100, y=gap_g,  name="Par ASW − Z-Spread (bps)",
@@ -192,10 +199,10 @@ fig4.update_layout(template=DARK, height=H, margin=MARGIN,
 fig4.update_yaxes(title_text="Gap (bps)", secondary_y=False, **AXIS)
 fig4.update_yaxes(title_text="Soulte",    secondary_y=True,  **AXIS)
 
-# ── GRAPH 5 : Duration & DV01 vs YTM ────────────────────────────────────────
+# ── GRAPH 5 : Duration & DV01 vs YTM ─────────────────────────────────────────
 
-md_g  = [mod_dur(coupon, mat, y, face, freq) for y in ytm_grid]
-dv_g  = [dv01_fn(coupon, mat, y, face, freq) for y in ytm_grid]
+md_g = [mod_dur(coupon, mat, y, face, freq) for y in ytm_grid]
+dv_g = [dv01_fn(coupon, mat, y, face, freq) for y in ytm_grid]
 
 fig5 = make_subplots(specs=[[{"secondary_y": True}]])
 fig5.add_scatter(x=ytm_grid*100, y=md_g, name="Mod. Duration",
@@ -210,7 +217,7 @@ fig5.update_layout(template=DARK, height=H, margin=MARGIN,
 fig5.update_yaxes(title_text="Mod. Duration", secondary_y=False, **AXIS)
 fig5.update_yaxes(title_text="DV01",          secondary_y=True,  **AXIS)
 
-# ── GRAPH 6 : Par ASW Surface ────────────────────────────────────────────────
+# ── GRAPH 6 : Par ASW Surface ─────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
 def _surface(c, r_, F, freq_):
@@ -231,7 +238,7 @@ fig6.update_layout(
     template=DARK, height=H, margin=dict(t=50, b=10, l=10, r=10),
 )
 
-# ── LAYOUT 2×3 ───────────────────────────────────────────────────────────────
+# ── LAYOUT 2×3 ────────────────────────────────────────────────────────────────
 
 r1c1, r1c2, r1c3 = st.columns(3)
 with r1c1: st.plotly_chart(fig1, use_container_width=True)

@@ -286,11 +286,11 @@ try:
     with m5:
         st.metric("Yield ASW (bps)", f"{y_asw:.2f}")
     with m6:
-        st.metric("Mod. Duration", f"{md:.4f} yr")
+        st.metric("Mod Duration (yr)", f"{md:.3f}")
     with m7:
-        st.metric("DV01", f"{dv01_val:.6f}")
+        st.metric("DV01", f"{dv01_val*100:.3f}%")
     with m8:
-        st.metric("Annuity", f"{ann:.6f}")
+        st.metric("Annuity", f"{ann:.3f}")
     
     
     # ── GRAPH GENERATION ──────────────────────────────────────────────────────

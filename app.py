@@ -32,28 +32,36 @@ def disc(r, T, freq):
 
 def dirty(c, T, y, F=100.0, freq=2):
     """
-    Pricing avec accrétion de coupon sur période stub.
+    Prix sale avec accrual correct sur stub period.
+    Tous les coupons réguliers sont complets.
+    La dernière date (toujours T) reçoit le principal SEULEMENT.
     """
     t, df = disc(y, T, freq)
-    
-    # Nombre de coupons complets
     n_full = int(np.floor(T * freq))
     
-    # Tous les coupons réguliers = coupon complet
-    cf = np.full(len(t), c / freq * F)
+    # Construire les flux
+    cf = np.zeros(len(t))
     
-    # Si T n'est pas un coupon exact, le DERNIER flux est partiel
-    # Durée de la stub = T - (n_full / freq)
+    # Coupons réguliers [1/freq, 2/freq, ..., n_full/freq]
+    for i in range(n_full):
+        cf[i] = c / freq * F
+    
+    # Dernière date = T (toujours)
+    # Si T est un coupon exact (stub_duration ≈ 0) : coupon complet + principal
+    # Si T est entre coupons : coupon partiel accrué + principal
     stub_duration = T - (n_full / freq)
     
-    # Accrual sur stub = coupon complet × (stub_duration × freq)
-    if stub_duration > 1e-12:
-        cf[-1] = (c / freq * F) * (stub_duration * freq)  # ← coupon proportionnel
-    
-    # Principal payé SEULEMENT au flux final exact (T)
-    cf[-1] += F
+    if stub_duration < 1e-12:
+        # T est un coupon régulier exact
+        cf[-1] = c / freq * F + F
+    else:
+        # T est entre n_full/freq et (n_full+1)/freq → stub period
+        # Coupon accrué sur stub + principal
+        accrued_coupon = (c / freq * F) * (stub_duration * freq)
+        cf[-1] = accrued_coupon + F
     
     return float(np.dot(cf, df))
+
 
 
 def par_asw(c, T, y, r, F=100.0, freq=2):

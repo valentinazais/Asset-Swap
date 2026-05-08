@@ -10,14 +10,7 @@ from scipy.optimize import brentq
 
 st.set_page_config(page_title="Asset Swap", layout="wide", initial_sidebar_state="collapsed")
 
-st.markdown("""
-<style>
-.block-container{padding-top:0.6rem;padding-bottom:0rem;}
-div[data-testid="metric-container"]{background:#1a1a2e;border-radius:5px;padding:4px 8px;}
-div[data-testid="metric-container"] label{font-size:0.7rem !important;}
-div[data-testid="metric-container"] div{font-size:0.95rem !important;}
-</style>
-""", unsafe_allow_html=True)
+
 
 # ── MATH ──────────────────────────────────────────────────────────────────────
 

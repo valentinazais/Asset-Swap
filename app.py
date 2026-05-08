@@ -29,10 +29,10 @@ def discount_factors(rate: float, T: float, freq: int) -> tuple[np.ndarray, np.n
     return t, df
 
 
-def cashflows(coupon: float, T: float, F: float, : int) -> tuple[np.ndarray, np.ndarray]:
+def cashflows(coupon: float, T: float, F: float, F : int) -> tuple[np.ndarray, np.ndarray]:
     """Build coupon and principal cash flows."""
     t, _ = discount_factors(0, T, )
-    n_coupons = int(np.floor(T * ))
+    n_coupons = int(np.floor(T * F ))
     coupon_period = 1 / 
     last_coupon_date = n_coupons / 
     

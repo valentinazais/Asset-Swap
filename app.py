@@ -246,8 +246,6 @@ with col6:
             st.session_state.rf_pct = min(15.0, st.session_state.rf_pct + 0.25)
     st.session_state.rf_pct = st.slider("##rf", 0.1, 15.0, st.session_state.rf_pct, 0.05, label_visibility="collapsed")
 
-st.divider()
-
 # ── EXTRACT VALUES ────────────────────────────────────────────────────────────
 
 face = st.session_state.face
@@ -293,8 +291,6 @@ try:
         st.metric("DV01", f"{dv01_val:.6f}")
     with m8:
         st.metric("Annuity", f"{ann:.6f}")
-    
-    st.divider()
     
     # ── GRAPH GENERATION ──────────────────────────────────────────────────────
     

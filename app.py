@@ -16,15 +16,19 @@ CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
 
 def disc(r, T, freq):
     """
-    Retourne (t, df) où :
-      t  : dates des cash flows — la dernière vaut exactement T
-      df : facteurs d'actualisation exp(-r * t)
-    Correction : t[-1] = T exact, élimine la discontinuité due à l'arrondi.
+    Dates de coupons : 1/freq, 2/freq, ..., jusqu'au dernier ≤ T.
+    Puis ajouter T si T > dernier coupon.
     """
-    n     = max(1, int(round(T * freq)))
-    t     = np.arange(1, n + 1) / freq
-    t[-1] = T                                        # FIX 1 : dernière date = T exact
+    n_full = int(np.floor(T * freq))
+    t_list = [k / freq for k in range(1, n_full + 1)]
+    
+    # Si T dépasse le dernier coupon régulier
+    if T > (n_full / freq + 1e-12):
+        t_list.append(T)
+    
+    t = np.array(t_list)
     return t, np.exp(-r * t)
+
 
 def dirty(c, T, y, F=100.0, freq=2):
     t, df = disc(y, T, freq)

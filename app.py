@@ -29,12 +29,12 @@ def discount_factors(rate: float, T: float, freq: int) -> tuple[np.ndarray, np.n
     return t, df
 
 
-def cashflows(coupon: float, T: float, F: float, freq: int) -> tuple[np.ndarray, np.ndarray]:
+def cashflows(coupon: float, T: float, F: float, : int) -> tuple[np.ndarray, np.ndarray]:
     """Build coupon and principal cash flows."""
-    t, _ = discount_factors(0, T, freq)
-    n_coupons = int(np.floor(T * freq))
-    coupon_period = 1 / freq
-    last_coupon_date = n_coupons / freq
+    t, _ = discount_factors(0, T, )
+    n_coupons = int(np.floor(T * ))
+    coupon_period = 1 / 
+    last_coupon_date = n_coupons / 
     
     cf = np.zeros(len(t))
     
@@ -45,22 +45,22 @@ def cashflows(coupon: float, T: float, F: float, freq: int) -> tuple[np.ndarray,
         cf[-1] = coupon * coupon_period * F + F
     else:
         stub_years = T - last_coupon_date
-        stub_frac = stub_years * freq
+        stub_frac = stub_years * 
         cf[-1] = coupon * stub_frac * coupon_period * F + F
     
     return t, cf
 
 
-def price_dirty(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
+def price_dirty(coupon: float, T: float, ytm: float, F: float = 100.0, : int = 2) -> float:
     """Calculate dirty bond price."""
-    t, cf = cashflows(coupon, T, F, freq)
+    t, cf = cashflows(coupon, T, F, )
     df = np.exp(-ytm * t)
     return float(np.dot(cf, df))
 
 
-def annuity_factor(ytm: float, T: float, freq: int) -> float:
+def annuity_factor(ytm: float, T: float, : int) -> float:
     """Calculate annuity factor."""
-    n_coupons = int(np.floor(T * freq))
+    n_coupons = int(np.floor(T * ))
     coupon_period = 1 / freq
     t_coupons = np.array([k / freq for k in range(1, n_coupons + 1)])
     df_coupons = np.exp(-ytm * t_coupons)
@@ -276,9 +276,9 @@ try:
     m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
     
     with m1:
-        st.metric("Dirty Price", f"{P:.4f}")
+        st.metric("Dirty Price", f"{P:.3f}")
     with m2:
-        st.metric("Soulte", f"{slt:.4f}")
+        st.metric("Soulte", f"{slt:.3f}")
     with m3:
         st.metric("Par ASW (bps)", f"{par_asw_val:.2f}")
     with m4:

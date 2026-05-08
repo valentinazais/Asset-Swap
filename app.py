@@ -2,7 +2,6 @@ from __future__ import annotations
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from scipy.optimize import brentq
 
 st.set_page_config(page_title="Asset Swap", layout="wide", initial_sidebar_state="collapsed")
@@ -11,12 +10,6 @@ DARK   = "plotly_dark"
 MARGIN = dict(t=40, b=40, l=50, r=40)
 H      = 420
 CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
-
-# ── CONVENTIONS ───────────────────────────────────────────────────────────────
-# Compounding: annual (all discount factors use annual spot rates)
-# Coupons: paid at t = k/freq for k = 1, 2, ..., n_coupons, then maturity T
-# Stub: SHORT STUB — if T is not at coupon date, accrued coupon from last coupon to T
-# Settlement: t=0, no accrued interest adjustment
 
 # ── MATH ──────────────────────────────────────────────────────────────────────
 
@@ -162,39 +155,111 @@ st.markdown("""
     }
     [data-testid="metric-container"] > div:first-child { font-size: 11px; color: #888; }
     [data-testid="metric-container"] > div:last-child { font-size: 18px; font-weight: bold; }
+    .input-label { font-size: 12px; color: #aaa; font-weight: 600; margin-bottom: 4px; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("Asset Swap Pricer")
 
-# ── INPUT SLIDERS ─────────────────────────────────────────────────────────────
+# ── INITIALIZE SESSION STATE ──────────────────────────────────────────────────
+
+if "face" not in st.session_state:
+    st.session_state.face = 100.0
+if "coupon_pct" not in st.session_state:
+    st.session_state.coupon_pct = 6.5
+if "mat" not in st.session_state:
+    st.session_state.mat = 7.0
+if "ytm_pct" not in st.session_state:
+    st.session_state.ytm_pct = 8.0
+if "rf_pct" not in st.session_state:
+    st.session_state.rf_pct = 3.0
+if "freq_label" not in st.session_state:
+    st.session_state.freq_label = "Semi"
+
+# ── INPUT CONTROLS ────────────────────────────────────────────────────────────
 
 col1, col2, col3, col4, col5, col6 = st.columns(6, gap="small")
 
+# FACE
 with col1:
-    face = st.slider("Face", 50.0, 500.0, 100.0, 1.0, key="face_slider", format="%.1f")
+    st.markdown('<div class="input-label">Face</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    with btn_col1:
+        if st.button("−", key="face_minus", use_container_width=True):
+            st.session_state.face = max(50.0, st.session_state.face - 5.0)
+    with btn_col2:
+        if st.button("+", key="face_plus", use_container_width=True):
+            st.session_state.face = min(500.0, st.session_state.face + 5.0)
+    st.session_state.face = st.slider("##face", 50.0, 500.0, st.session_state.face, 1.0, key="face_slider", label_visibility="collapsed")
 
+# COUPON
 with col2:
-    coupon_pct = st.slider("Coupon (%)", 0.5, 15.0, 6.5, 0.05, key="coupon_slider", format="%.2f")
-    coupon = coupon_pct / 100
+    st.markdown('<div class="input-label">Coupon (%)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    with btn_col1:
+        if st.button("−", key="coupon_minus", use_container_width=True):
+            st.session_state.coupon_pct = max(0.5, st.session_state.coupon_pct - 0.25)
+    with btn_col2:
+        if st.button("+", key="coupon_plus", use_container_width=True):
+            st.session_state.coupon_pct = min(15.0, st.session_state.coupon_pct + 0.25)
+    st.session_state.coupon_pct = st.slider("##coupon", 0.5, 15.0, st.session_state.coupon_pct, 0.05, key="coupon_slider", label_visibility="collapsed")
 
+# MATURITY
 with col3:
-    mat = st.slider("Maturity (yr)", 0.5, 30.0, 7.0, 0.25, key="mat_slider", format="%.2f")
+    st.markdown('<div class="input-label">Maturity (yr)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    with btn_col1:
+        if st.button("−", key="mat_minus", use_container_width=True):
+            st.session_state.mat = max(0.5, st.session_state.mat - 0.5)
+    with btn_col2:
+        if st.button("+", key="mat_plus", use_container_width=True):
+            st.session_state.mat = min(30.0, st.session_state.mat + 0.5)
+    st.session_state.mat = st.slider("##mat", 0.5, 30.0, st.session_state.mat, 0.25, key="mat_slider", label_visibility="collapsed")
 
+# FREQUENCY
 with col4:
-    freq_label = st.selectbox("Freq", ["Annual", "Semi", "Quarterly"], index=1, key="freq_select")
-    freq_map = {"Annual": 1, "Semi": 2, "Quarterly": 4}
-    freq = freq_map[freq_label]
+    st.markdown('<div class="input-label">Freq</div>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.session_state.freq_label = st.selectbox("##freq", ["Annual", "Semi", "Quarterly"], index=["Annual", "Semi", "Quarterly"].index(st.session_state.freq_label), key="freq_select", label_visibility="collapsed")
 
+# YTM
 with col5:
-    ytm_pct = st.slider("YTM (%)", 0.5, 20.0, 8.0, 0.05, key="ytm_slider", format="%.2f")
-    ytm = ytm_pct / 100
+    st.markdown('<div class="input-label">YTM (%)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    with btn_col1:
+        if st.button("−", key="ytm_minus", use_container_width=True):
+            st.session_state.ytm_pct = max(0.5, st.session_state.ytm_pct - 0.25)
+    with btn_col2:
+        if st.button("+", key="ytm_plus", use_container_width=True):
+            st.session_state.ytm_pct = min(20.0, st.session_state.ytm_pct + 0.25)
+    st.session_state.ytm_pct = st.slider("##ytm", 0.5, 20.0, st.session_state.ytm_pct, 0.05, key="ytm_slider", label_visibility="collapsed")
 
+# RISK-FREE
 with col6:
-    rf_pct = st.slider("Risk-Free (%)", 0.1, 15.0, 3.0, 0.05, key="rf_slider", format="%.2f")
-    rf = rf_pct / 100
+    st.markdown('<div class="input-label">Risk-Free (%)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2, gap="tiny")
+    with btn_col1:
+        if st.button("−", key="rf_minus", use_container_width=True):
+            st.session_state.rf_pct = max(0.1, st.session_state.rf_pct - 0.25)
+    with btn_col2:
+        if st.button("+", key="rf_plus", use_container_width=True):
+            st.session_state.rf_pct = min(15.0, st.session_state.rf_pct + 0.25)
+    st.session_state.rf_pct = st.slider("##rf", 0.1, 15.0, st.session_state.rf_pct, 0.05, key="rf_slider", label_visibility="collapsed")
 
 st.divider()
+
+# ── EXTRACT VALUES ────────────────────────────────────────────────────────────
+
+face = st.session_state.face
+coupon_pct = st.session_state.coupon_pct
+coupon = coupon_pct / 100
+mat = st.session_state.mat
+freq_map = {"Annual": 1, "Semi": 2, "Quarterly": 4}
+freq = freq_map[st.session_state.freq_label]
+ytm_pct = st.session_state.ytm_pct
+ytm = ytm_pct / 100
+rf_pct = st.session_state.rf_pct
+rf = rf_pct / 100
 
 # ── CALCULATIONS & DISPLAY ────────────────────────────────────────────────────
 
@@ -248,57 +313,69 @@ try:
     # ── FIGURE 1: Bond Price vs YTM ───────────────────────────────────────────
     
     fig1 = go.Figure()
-    fig1.add_scatter(x=ytm_grid*100, y=prices, mode="lines", name="Bond Price",
-                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.2f}<extra></extra>")
+    fig1.add_trace(go.Scatter(x=ytm_grid*100, y=prices, mode="lines", name="Bond Price",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.2f}<extra></extra>"))
     fig1.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig1.update_layout(template=DARK, height=H, margin=MARGIN, title="Bond Price vs YTM",
                       xaxis_title="YTM (%)", yaxis_title="Price (%)", hovermode="x unified", showlegend=False)
+    fig1.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
+    fig1.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 2: Par ASW vs YTM ──────────────────────────────────────────────
     
     fig2 = go.Figure()
-    fig2.add_scatter(x=ytm_grid*100, y=par_asws, mode="lines", name="Par ASW",
-                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>")
+    fig2.add_trace(go.Scatter(x=ytm_grid*100, y=par_asws, mode="lines", name="Par ASW",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>"))
     fig2.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig2.update_layout(template=DARK, height=H, margin=MARGIN, title="Par ASW vs YTM",
                       xaxis_title="YTM (%)", yaxis_title="Par ASW (bps)", hovermode="x unified", showlegend=False)
+    fig2.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
+    fig2.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 3: Soulte vs YTM ───────────────────────────────────────────────
     
     fig3 = go.Figure()
-    fig3.add_scatter(x=ytm_grid*100, y=soultes, mode="lines", name="Soulte",
-                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f}<extra></extra>")
+    fig3.add_trace(go.Scatter(x=ytm_grid*100, y=soultes, mode="lines", name="Soulte",
+                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f}<extra></extra>"))
     fig3.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, annotation_text="At Par", annotation_position="right")
     fig3.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig3.update_layout(template=DARK, height=H, margin=MARGIN, title="Soulte vs YTM",
                       xaxis_title="YTM (%)", yaxis_title="Soulte (price)", hovermode="x unified", showlegend=False)
+    fig3.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
+    fig3.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 4: Z-Spread vs YTM ─────────────────────────────────────────────
     
     fig4 = go.Figure()
-    fig4.add_scatter(x=ytm_grid*100, y=z_spreads, mode="lines", name="Z-Spread",
-                     line=dict(color=CB, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>")
+    fig4.add_trace(go.Scatter(x=ytm_grid*100, y=z_spreads, mode="lines", name="Z-Spread",
+                     line=dict(color=CB, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>"))
     fig4.add_vline(x=ytm_pct, line_dash="dash", line_color=CA, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig4.update_layout(template=DARK, height=H, margin=MARGIN, title="Z-Spread vs YTM",
                       xaxis_title="YTM (%)", yaxis_title="Z-Spread (bps)", hovermode="x unified", showlegend=False)
+    fig4.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
+    fig4.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 5: Modified Duration vs YTM ────────────────────────────────────
     
     fig5 = go.Figure()
-    fig5.add_scatter(x=ytm_grid*100, y=durations, mode="lines", name="Mod. Duration",
-                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f} yr<extra></extra>")
+    fig5.add_trace(go.Scatter(x=ytm_grid*100, y=durations, mode="lines", name="Mod. Duration",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f} yr<extra></extra>"))
     fig5.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig5.update_layout(template=DARK, height=H, margin=MARGIN, title="Modified Duration vs YTM",
                       xaxis_title="YTM (%)", yaxis_title="Duration (yr)", hovermode="x unified", showlegend=False)
+    fig5.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
+    fig5.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 6: DV01 vs YTM ─────────────────────────────────────────────────
     
     fig6 = go.Figure()
-    fig6.add_scatter(x=ytm_grid*100, y=dv01s, mode="lines", name="DV01",
-                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.6f}<extra></extra>")
+    fig6.add_trace(go.Scatter(x=ytm_grid*100, y=dv01s, mode="lines", name="DV01",
+                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.6f}<extra></extra>"))
     fig6.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig6.update_layout(template=DARK, height=H, margin=MARGIN, title="DV01 vs YTM",
                       xaxis_title="YTM (%)", yaxis_title="DV01", hovermode="x unified", showlegend=False)
+    fig6.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
+    fig6.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 7: Par ASW Surface (Maturity × YTM) ────────────────────────────
     

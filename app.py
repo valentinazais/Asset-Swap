@@ -9,226 +9,229 @@ from scipy.optimize import brentq
 
 st.set_page_config(page_title="Asset Swap", layout="wide", initial_sidebar_state="collapsed")
 
+DARK   = "plotly_dark"
+MARGIN = dict(t=50, b=50, l=55, r=55)
+H      = 370
+CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
+
 # ── MATH ──────────────────────────────────────────────────────────────────────
 
-def discount_factors(r, T, freq):
-    n = max(1, int(round(T * freq)))
-    t = np.arange(1, n + 1) / freq
+def disc(r, T, freq):
+    n  = max(1, int(round(T * freq)))
+    t  = np.arange(1, n + 1) / freq
     return t, np.exp(-r * t)
 
-def bond_price(c, T, y, F=100.0, freq=2):
-    t, df = discount_factors(y, T, freq)
-    cf = np.full(len(t), c / freq * F)
-    cf[-1] += F
+def dirty(c, T, y, F=100.0, freq=2):
+    t, df = disc(y, T, freq)
+    cf    = np.full(len(t), c / freq * F); cf[-1] += F
     return float(np.dot(cf, df))
 
 def par_asw(c, T, y, r, F=100.0, freq=2):
-    t, df_rf = discount_factors(r, T, freq)
-    ann = float(np.sum(df_rf)) / freq
+    t, df_rf = disc(r, T, freq)
+    ann = float(np.sum(df_rf / freq))
     ZT  = np.exp(-r * T)
-    P   = bond_price(c, T, y, F, freq) / F
-    return float((c * ann + ZT - P) / ann) * 1e4 if ann > 1e-12 else 0.0
+    P   = dirty(c, T, y, F, freq) / F
+    return float((c * ann + ZT - P) / ann * 1e4) if ann > 1e-12 else 0.0
 
 def z_spread(c, T, y, r, F=100.0, freq=2):
-    dp = bond_price(c, T, y, F, freq)
-    def pv_diff(z):
-        t, _ = discount_factors(r, T, freq)
-        df = np.exp(-(r + z) * t)
-        cf = np.full(len(t), c / freq * F); cf[-1] += F
-        return float(np.dot(cf, df)) - dp
+    P = dirty(c, T, y, F, freq)
+    def pv(s):
+        t, _ = disc(r, T, freq)
+        df   = np.exp(-(r + s) * t)
+        cf   = np.full(len(t), c / freq * F); cf[-1] += F
+        return float(np.dot(cf, df)) - P
     try:
-        return brentq(pv_diff, -0.5, 5.0, xtol=1e-12) * 1e4
+        return brentq(pv, -0.5, 5.0, xtol=1e-10) * 1e4
     except Exception:
         return float("nan")
 
-def mod_duration(c, T, y, F=100.0, freq=2):
-    t, df = discount_factors(y, T, freq)
-    cf = np.full(len(t), c / freq * F); cf[-1] += F
-    P = float(np.dot(cf, df))
-    return float(np.dot(t * cf, df)) / P / (1 + y / freq)
+def yield_asw(c, T, y, r, F=100.0, freq=2):
+    return (y - r) * 1e4
 
-def all_metrics(c, T, y, r, F, freq):
-    P   = bond_price(c, T, y, F, freq)
-    sol = P - F
-    pa  = par_asw(c, T, y, r, F, freq)
-    zs  = z_spread(c, T, y, r, F, freq)
-    ya  = (y - r) * 1e4
-    md  = mod_duration(c, T, y, F, freq)
-    dv01 = P * md / 1e4
-    t, df_rf = discount_factors(r, T, freq)
-    ann = float(np.sum(df_rf)) / freq
-    return dict(P=P, sol=sol, pa=pa, zs=zs, ya=ya, md=md, dv01=dv01, ann=ann)
+def soulte(c, T, y, F=100.0, freq=2):
+    return dirty(c, T, y, F, freq) - F
 
-# ── CONTROLS ──────────────────────────────────────────────────────────────────
+def mod_dur(c, T, y, F=100.0, freq=2):
+    t, df = disc(y, T, freq)
+    cf    = np.full(len(t), c / freq * F); cf[-1] += F
+    P     = float(np.dot(cf, df))
+    D_mac = float(np.dot(t * cf, df)) / P
+    return D_mac / (1 + y / freq)
 
-st.markdown("### Asset Swap Pricer")
+def dv01_fn(c, T, y, F=100.0, freq=2):
+    return (dirty(c, T, y - 5e-5, F, freq) - dirty(c, T, y + 5e-5, F, freq)) / 2.0
 
-if "rc" not in st.session_state:
-    st.session_state.rc = 0
-rc = st.session_state.rc
+# ── CONTROLS ─────────────────────────────────────────────────────────────────
 
-cols = st.columns([1.2, 1.2, 1.2, 1.0, 1.2, 1.2, 0.5])
-face   = cols[0].number_input("Face",          value=100.0, step=10.0,  format="%.0f",  key=f"F_{rc}")
-coupon = cols[1].number_input("Coupon",        value=0.050, step=0.005, format="%.3f",  min_value=0.001, max_value=0.25,  key=f"c_{rc}")
-mat    = cols[2].number_input("Maturity (yr)", value=5.0,   step=0.5,   format="%.1f",  min_value=0.5,   max_value=30.0,  key=f"T_{rc}")
-freq   = cols[3].selectbox("Freq", [1,2,4], index=1, format_func=lambda x:{1:"Ann",2:"Semi",4:"Qtr"}[x], key=f"fr_{rc}")
-ytm    = cols[4].number_input("YTM",           value=0.055, step=0.005, format="%.3f",  min_value=0.001, max_value=0.30,  key=f"y_{rc}")
-rf     = cols[5].number_input("Risk-Free",     value=0.030, step=0.005, format="%.3f",  min_value=0.001, max_value=0.20,  key=f"r_{rc}")
-with cols[6]:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("↻"):
-        st.session_state.rc += 1
+st.title("Asset Swap Pricer")
+
+c1, c2, c3, c4, c5, c6, c7 = st.columns([1.2, 1.2, 1.2, 1.4, 1.2, 1.2, 0.8])
+with c1:
+    face   = st.number_input("Face",        min_value=10.0,   max_value=10000.0, value=100.0,  step=10.0)
+with c2:
+    coupon = st.number_input("Coupon",      min_value=0.001,  max_value=0.30,    value=0.05,   step=0.005, format="%.3f")
+with c3:
+    mat    = st.number_input("Maturity (yr)", min_value=0.5,  max_value=30.0,    value=5.0,    step=0.5)
+with c4:
+    freq_label = st.selectbox("Freq", ["Annual", "Semi", "Quarterly"], index=1)
+    freq = {"Annual": 1, "Semi": 2, "Quarterly": 4}[freq_label]
+with c5:
+    ytm    = st.number_input("YTM",         min_value=0.001,  max_value=0.30,    value=0.055,  step=0.005, format="%.3f")
+with c6:
+    rf     = st.number_input("Risk-Free",   min_value=0.001,  max_value=0.25,    value=0.03,   step=0.005, format="%.3f")
+with c7:
+    if st.button("Reset"):
         st.rerun()
 
-m = all_metrics(coupon, mat, ytm, rf, face, freq)
+# ── METRICS ──────────────────────────────────────────────────────────────────
 
-mc = st.columns(8)
-mc[0].metric("Dirty Price",     f"{m['P']:.3f}")
-mc[1].metric("Soulte",          f"{m['sol']:+.3f}")
-mc[2].metric("Par ASW (bps)",   f"{m['pa']:.2f}")
-mc[3].metric("Z-Spread (bps)",  f"{m['zs']:.2f}")
-mc[4].metric("Yield ASW (bps)", f"{m['ya']:.2f}")
-mc[5].metric("Mod. Duration",   f"{m['md']:.4f}")
-mc[6].metric("DV01",            f"{m['dv01']:.5f}")
-mc[7].metric("Annuity",         f"{m['ann']:.4f}")
+dp   = dirty(coupon, mat, ytm, face, freq)
+soul = soulte(coupon, mat, ytm, face, freq)
+pasw = par_asw(coupon, mat, ytm, rf, face, freq)
+zspr = z_spread(coupon, mat, ytm, rf, face, freq)
+yasw = yield_asw(coupon, mat, ytm, rf, face, freq)
+md   = mod_dur(coupon, mat, ytm, face, freq)
+dv   = dv01_fn(coupon, mat, ytm, face, freq)
+t_rf, df_rf = disc(rf, mat, freq)
+ann  = float(np.sum(df_rf / freq))
+
+m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
+m1.metric("Dirty Price",      f"{dp:.4f}")
+m2.metric("Soulte",           f"{soul:.4f}")
+m3.metric("Par ASW (bps)",    f"{pasw:.2f}")
+m4.metric("Z-Spread (bps)",   f"{zspr:.2f}")
+m5.metric("Yield ASW (bps)",  f"{yasw:.2f}")
+m6.metric("Mod. Duration",    f"{md:.4f}")
+m7.metric("DV01",             f"{dv:.6f}")
+m8.metric("Annuity",          f"{ann:.6f}")
 
 st.divider()
 
-# ── SWEEPS ────────────────────────────────────────────────────────────────────
+# ── GRID PARAMS ──────────────────────────────────────────────────────────────
 
-N = 200
-DARK   = "plotly_dark"
-H      = 300
-MARGIN = dict(t=30, b=36, l=44, r=12)
-CA, CB, CC, CD = "#00b4d8", "#f77f00", "#06d6a0", "#e63946"
+ytm_grid = np.linspace(max(0.002, rf - 0.02), rf + 0.14, 120)
+rf_grid  = np.linspace(0.005, 0.10, 80)
+mat_grid = np.linspace(0.5, 20.0, 200)
 
-def vline(fig, x):
-    fig.add_vline(x=x, line_dash="dot", line_color="rgba(255,255,255,0.4)", line_width=1)
+LEGEND = dict(orientation="h", y=1.06, x=0, font=dict(size=13))
+AXIS   = dict(tickfont=dict(size=12), title_font=dict(size=13))
 
-# ── GRAPH 1 : Spread decomposition vs YTM ─────────────────────────────────────
-# Shows WHY par ASW ≠ yield ASW ≠ z-spread and how they diverge
+def vline(fig, x, row=None, col=None):
+    kw = dict(x0=x, x1=x, line=dict(color="white", width=1, dash="dot"),
+              xref="x", yref="paper", y0=0, y1=1, type="line")
+    if row:
+        fig.add_shape(**kw, row=row, col=col)
+    else:
+        fig.add_shape(**kw)
 
-ytm_g = np.linspace(max(0.002, ytm - 0.07), ytm + 0.10, N)
-pa_y, zs_y, ya_y = [], [], []
-for y_ in ytm_g:
-    res = all_metrics(coupon, mat, y_, rf, face, freq)
-    pa_y.append(res["pa"]); zs_y.append(res["zs"]); ya_y.append(res["ya"])
+# ── GRAPH 1 : Spread Conventions vs YTM ─────────────────────────────────────
+
+pasw_g  = [par_asw(coupon, mat, y, rf, face, freq)    for y in ytm_grid]
+zspr_g  = [z_spread(coupon, mat, y, rf, face, freq)   for y in ytm_grid]
+yasw_g  = [yield_asw(coupon, mat, y, rf, face, freq)  for y in ytm_grid]
 
 fig1 = go.Figure()
-fig1.add_scatter(x=ytm_g*100, y=pa_y, name="Par ASW",   line=dict(color=CA, width=2))
-fig1.add_scatter(x=ytm_g*100, y=zs_y, name="Z-Spread",  line=dict(color=CB, width=2, dash="dash"))
-fig1.add_scatter(x=ytm_g*100, y=ya_y, name="Yield ASW", line=dict(color=CC, width=2, dash="dot"))
+fig1.add_scatter(x=ytm_grid*100, y=pasw_g, name="Par ASW",   line=dict(color=CA, width=2))
+fig1.add_scatter(x=ytm_grid*100, y=zspr_g, name="Z-Spread",  line=dict(color=CB, width=2, dash="dash"))
+fig1.add_scatter(x=ytm_grid*100, y=yasw_g, name="Yield ASW", line=dict(color=CC, width=2, dash="dot"))
 vline(fig1, ytm*100)
 fig1.update_layout(template=DARK, height=H, margin=MARGIN,
-                   title="1 · Spread Conventions vs YTM",
-                   xaxis_title="YTM (%)", yaxis_title="bps",
-                   legend=dict(orientation="h", y=1.18, x=0, font_size=11))
+                   title=dict(text="Spread Conventions vs YTM", font=dict(size=15)),
+                   xaxis=dict(title="YTM (%)", **AXIS),
+                   yaxis=dict(title="bps", **AXIS),
+                   legend=LEGEND)
 
-# ── GRAPH 2 : Soulte vs YTM — core mechanism ──────────────────────────────────
-# The soulte crosses zero at par (ytm = coupon): fundamental ASW concept
+# ── GRAPH 2 : Soulte vs YTM ──────────────────────────────────────────────────
 
-ytm_g2 = np.linspace(max(0.002, coupon - 0.08), coupon + 0.08, N)
-so_y2  = [bond_price(coupon, mat, y_, face, freq) - face for y_ in ytm_g2]
+soul_g = [soulte(coupon, mat, y, face, freq) for y in ytm_grid]
 
 fig2 = go.Figure()
-fig2.add_scatter(x=ytm_g2*100, y=so_y2, line=dict(color=CD, width=2.5), name="Soulte")
-fig2.add_hline(y=0, line_dash="dot", line_color="grey", line_width=1)
-fig2.add_vline(x=coupon*100, line_dash="dot", line_color="rgba(255,255,255,0.4)", line_width=1,
-               annotation_text="YTM = Coupon", annotation_position="top right",
-               annotation_font_color="white", annotation_font_size=10)
+fig2.add_scatter(x=ytm_grid*100, y=soul_g, line=dict(color=CB, width=2.5), showlegend=False)
+fig2.add_hline(y=0, line_dash="dot", line_color="white", line_width=1)
+vline(fig2, ytm*100)
+fig2.add_vline(x=coupon*100, line_dash="dash", line_color="#aaa", line_width=1,
+               annotation_text="YTM = Coupon", annotation_font_size=12,
+               annotation_position="top right")
 fig2.update_layout(template=DARK, height=H, margin=MARGIN,
-                   title="2 · Soulte vs YTM  (zero at par)",
-                   xaxis_title="YTM (%)", yaxis_title="Soulte",
-                   showlegend=False)
+                   title=dict(text="Soulte vs YTM  (zero at par)", font=dict(size=15)),
+                   xaxis=dict(title="YTM (%)", **AXIS),
+                   yaxis=dict(title="Soulte", **AXIS))
 
-# ── GRAPH 3 : Par ASW vs Maturity for different coupons ───────────────────────
-# Shows term structure sensitivity and coupon effect
+# ── GRAPH 3 : Par ASW Term Structure by Coupon ───────────────────────────────
 
-mat_g = np.linspace(0.5, 20.0, N)
-coupons_test = [rf - 0.02, rf, coupon, coupon + 0.03]
-colors_coup  = [CA, CC, CD, CB]
+coupons_ts = [0.01, 0.03, 0.05, 0.08]
+colors_ts  = [CA, "#48cae4", CC, CB]
 
 fig3 = go.Figure()
-for cp, col in zip(coupons_test, colors_coup):
-    if cp < 0.001:
-        continue
-    pa_m = [par_asw(cp, m_, ytm, rf, face, freq) for m_ in mat_g]
-    label = f"c={cp*100:.1f}%"
-    fig3.add_scatter(x=mat_g, y=pa_m, name=label, line=dict(color=col, width=2))
+for cp, col in zip(coupons_ts, colors_ts):
+    ts_vals = [par_asw(cp, m, ytm, rf, face, freq) for m in mat_grid]
+    fig3.add_scatter(x=mat_grid, y=ts_vals,
+                     name=f"c={cp:.1%}", line=dict(color=col, width=2))
 vline(fig3, mat)
 fig3.update_layout(template=DARK, height=H, margin=MARGIN,
-                   title="3 · Par ASW Term Structure — by Coupon",
-                   xaxis_title="Maturity (yr)", yaxis_title="Par ASW (bps)",
-                   legend=dict(orientation="h", y=1.18, x=0, font_size=11))
+                   title=dict(text="Par ASW Term Structure — by Coupon", font=dict(size=15)),
+                   xaxis=dict(title="Maturity (yr)", **AXIS),
+                   yaxis=dict(title="Par ASW (bps)", **AXIS),
+                   legend=LEGEND)
 
-# ── GRAPH 4 : Par ASW vs Z-Spread gap vs Soulte ───────────────────────────────
-# The gap (par ASW - z-spread) is driven by the soulte — key analytical insight
+# ── GRAPH 4 : Gap (Par ASW − Z-Spread) + Soulte ─────────────────────────────
 
-ytm_g4  = np.linspace(max(0.002, ytm - 0.07), ytm + 0.10, N)
-gap4, sol4 = [], []
-for y_ in ytm_g4:
-    res = all_metrics(coupon, mat, y_, rf, face, freq)
-    gap4.append(res["pa"] - res["zs"])
-    sol4.append(res["sol"])
+gap_g  = [p - z for p, z in zip(pasw_g, zspr_g)]
 
 fig4 = make_subplots(specs=[[{"secondary_y": True}]])
-fig4.add_trace(go.Scatter(x=ytm_g4*100, y=gap4, name="Par ASW − Z-Spread (bps)",
-                           line=dict(color=CA, width=2)), secondary_y=False)
-fig4.add_trace(go.Scatter(x=ytm_g4*100, y=sol4, name="Soulte",
-                           line=dict(color=CD, width=2, dash="dash")), secondary_y=True)
-fig4.add_hline(y=0, line_dash="dot", line_color="grey", line_width=1)
-vline(fig4, ytm*100)
+fig4.add_scatter(x=ytm_grid*100, y=gap_g,  name="Par ASW − Z-Spread (bps)",
+                 line=dict(color=CA, width=2), secondary_y=False)
+fig4.add_scatter(x=ytm_grid*100, y=soul_g, name="Soulte",
+                 line=dict(color=CB, width=2, dash="dash"), secondary_y=True)
+fig4.add_hline(y=0, line_dash="dot", line_color="white", line_width=1, secondary_y=False)
+vline(fig4, ytm*100, row=1, col=1)
 fig4.update_layout(template=DARK, height=H, margin=MARGIN,
-                   title="4 · Par ASW vs Z-Spread Gap ↔ Soulte",
-                   legend=dict(orientation="h", y=1.18, x=0, font_size=11))
-fig4.update_xaxes(title_text="YTM (%)")
-fig4.update_yaxes(title_text="Gap (bps)",  secondary_y=False)
-fig4.update_yaxes(title_text="Soulte",     secondary_y=True, showgrid=False)
+                   title=dict(text="Par ASW vs Z-Spread Gap & Soulte", font=dict(size=15)),
+                   xaxis=dict(title="YTM (%)", **AXIS),
+                   legend=LEGEND)
+fig4.update_yaxes(title_text="Gap (bps)", secondary_y=False, **AXIS)
+fig4.update_yaxes(title_text="Soulte",    secondary_y=True,  **AXIS)
 
-# ── GRAPH 5 : Duration & DV01 vs YTM ─────────────────────────────────────────
-# Interest rate sensitivity of the ASW position
+# ── GRAPH 5 : Duration & DV01 vs YTM ────────────────────────────────────────
 
-durs, dv01s = [], []
-for y_ in ytm_g:
-    res = all_metrics(coupon, mat, y_, rf, face, freq)
-    durs.append(res["md"]); dv01s.append(res["dv01"])
+md_g  = [mod_dur(coupon, mat, y, face, freq) for y in ytm_grid]
+dv_g  = [dv01_fn(coupon, mat, y, face, freq) for y in ytm_grid]
 
 fig5 = make_subplots(specs=[[{"secondary_y": True}]])
-fig5.add_trace(go.Scatter(x=ytm_g*100, y=durs,  name="Mod. Duration",
-                           line=dict(color=CA, width=2)), secondary_y=False)
-fig5.add_trace(go.Scatter(x=ytm_g*100, y=dv01s, name="DV01",
-                           line=dict(color=CB, width=2, dash="dash")), secondary_y=True)
-vline(fig5, ytm*100)
+fig5.add_scatter(x=ytm_grid*100, y=md_g, name="Mod. Duration",
+                 line=dict(color=CA, width=2), secondary_y=False)
+fig5.add_scatter(x=ytm_grid*100, y=dv_g, name="DV01",
+                 line=dict(color=CC, width=2, dash="dash"), secondary_y=True)
+vline(fig5, ytm*100, row=1, col=1)
 fig5.update_layout(template=DARK, height=H, margin=MARGIN,
-                   title="5 · Duration & DV01 vs YTM",
-                   legend=dict(orientation="h", y=1.18, x=0, font_size=11))
-fig5.update_xaxes(title_text="YTM (%)")
-fig5.update_yaxes(title_text="Mod. Duration", secondary_y=False)
-fig5.update_yaxes(title_text="DV01",          secondary_y=True, showgrid=False)
+                   title=dict(text="Duration & DV01 vs YTM", font=dict(size=15)),
+                   xaxis=dict(title="YTM (%)", **AXIS),
+                   legend=LEGEND)
+fig5.update_yaxes(title_text="Mod. Duration", secondary_y=False, **AXIS)
+fig5.update_yaxes(title_text="DV01",          secondary_y=True,  **AXIS)
 
-# ── GRAPH 6 : Par ASW surface Maturity × YTM ─────────────────────────────────
-# Full 2D view of how spread varies across the two most important dimensions
+# ── GRAPH 6 : Par ASW Surface ────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
 def _surface(c, r_, F, freq_):
-    mats = np.linspace(0.5, 15, 45)
-    ytms = np.linspace(max(0.002, r_ - 0.02), r_ + 0.12, 45)
-    Z = np.array([[par_asw(c, m_, y_, r_, F, freq_) for y_ in ytms] for m_ in mats])
-    return mats, ytms, Z
+    mats_ = np.linspace(1, 15, 35)
+    ytms_ = np.linspace(max(0.002, r_ - 0.02), r_ + 0.12, 35)
+    Z     = np.array([[par_asw(c, m_, y_, r_, F, freq_) for y_ in ytms_] for m_ in mats_])
+    return mats_, ytms_, Z
 
 mats_s, ytms_s, Z_s = _surface(coupon, rf, face, freq)
-fig6 = go.Figure(go.Surface(
-    x=ytms_s*100, y=mats_s, z=Z_s,
-    colorscale="Viridis",
-    contours=dict(z=dict(show=True, usecolormap=True, project_z=True))
-))
+fig6 = go.Figure(go.Surface(x=ytms_s*100, y=mats_s, z=Z_s, colorscale="Viridis"))
 fig6.update_layout(
-    title="6 · Par ASW Surface — Maturity × YTM",
-    scene=dict(xaxis_title="YTM (%)", yaxis_title="Maturity (yr)", zaxis_title="Par ASW (bps)"),
-    template=DARK, height=H + 50, margin=dict(t=30, b=0, l=0, r=0),
+    scene=dict(
+        xaxis=dict(title="YTM (%)",       tickfont=dict(size=11), title_font=dict(size=13)),
+        yaxis=dict(title="Maturity (yr)", tickfont=dict(size=11), title_font=dict(size=13)),
+        zaxis=dict(title="Par ASW (bps)", tickfont=dict(size=11), title_font=dict(size=13)),
+    ),
+    title=dict(text="Par ASW Surface — Maturity × YTM", font=dict(size=15)),
+    template=DARK, height=H, margin=dict(t=50, b=10, l=10, r=10),
 )
 
-# ── LAYOUT 2×3 ────────────────────────────────────────────────────────────────
+# ── LAYOUT 2×3 ───────────────────────────────────────────────────────────────
 
 r1c1, r1c2, r1c3 = st.columns(3)
 with r1c1: st.plotly_chart(fig1, use_container_width=True)

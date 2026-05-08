@@ -75,192 +75,319 @@ def par_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, fr
     df_terminal = np.exp(-rf * T)
     
     if ann_rf < 1e-12:
-        return 0.0
+        return float("nan")
     
-    numerator = P - df_terminal
-    denominator = ann_rf
+    spread = (coupon * ann_ytm + df_terminal - P) / ann_rf
+    return float(spread * 1e4)
+
+
+def z_spread(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate Z-spread."""
+    P = price_dirty(coupon, T, ytm, F, freq)
+    t, cf = cashflows(coupon, T, F, freq)
     
-    asw_spread = numerator / denominator
-    return asw_spread * 10000
+    def pv_residual(s):
+        df = np.exp(-(rf + s) * t)
+        return float(np.dot(cf, df)) - P
+    
+    try:
+        z = brentq(pv_residual, -0.5, 5.0, xtol=1e-10)
+        return float(z * 1e4)
+    except ValueError:
+        return float("nan")
 
 
-def yield_asw(coupon: float, T: float, ytm: float, rf: float, asw_bps: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate yield asset swap spread."""
-    return asw_bps - (ytm - rf) * 10000
+def yield_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate yield ASW."""
+    return float((ytm - rf) * 1e4)
 
 
-def mod_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
+def soulte(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate soulte."""
+    P = price_dirty(coupon, T, ytm, F, freq)
+    return float(P - F)
+
+
+def macaulay_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate Macaulay duration."""
+    t, cf = cashflows(coupon, T, F, freq)
+    df = np.exp(-ytm * t)
+    P = float(np.dot(cf, df))
+    
+    if P < 1e-12:
+        return float("nan")
+    
+    D_mac = float(np.dot(t * cf, df)) / P
+    return D_mac
+
+
+def modified_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
     """Calculate modified duration."""
-    shift = 0.0001
-    P0 = price_dirty(coupon, T, ytm, F, freq)
-    P_up = price_dirty(coupon, T, ytm + shift, F, freq)
-    P_dn = price_dirty(coupon, T, ytm - shift, F, freq)
+    D_mac = macaulay_duration(coupon, T, ytm, F, freq)
     
-    duration = (P_dn - P_up) / (2 * P0 * shift)
-    return duration / (1 + ytm / freq)
+    if np.isnan(D_mac):
+        return float("nan")
+    
+    return float(D_mac / (1 + ytm / freq))
 
 
 def dv01(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate DV01 per $100 face."""
-    shift = 0.0001
-    P0 = price_dirty(coupon, T, ytm, F, freq)
-    P_up = price_dirty(coupon, T, ytm + shift, F, freq)
+    """Calculate DV01."""
+    P = price_dirty(coupon, T, ytm, F, freq)
+    MD = modified_duration(coupon, T, ytm, F, freq)
     
-    return abs(P_up - P0)
+    if np.isnan(MD):
+        return float("nan")
+    
+    return float(MD * P * 0.0001)
 
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+# ── STREAMLIT INTERFACE ───────────────────────────────────────────────────────
+
+st.markdown("""
+    <style>
+    h1 { font-size: 28px; margin-bottom: 15px; }
+    [data-testid="metric-container"] {
+        background-color: rgba(28, 35, 45, 0.8);
+        padding: 12px 15px;
+        border-radius: 8px;
+        border-left: 3px solid #00b4d8;
+    }
+    [data-testid="metric-container"] > div:first-child { font-size: 11px; color: #888; }
+    [data-testid="metric-container"] > div:last-child { font-size: 18px; font-weight: bold; }
+    .input-label { font-size: 12px; color: #aaa; font-weight: 600; margin-bottom: 4px; }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("Asset Swap Pricer")
+
+# ── INITIALIZE SESSION STATE ──────────────────────────────────────────────────
+
+if "face" not in st.session_state:
+    st.session_state.face = 100.0
+if "coupon_pct" not in st.session_state:
+    st.session_state.coupon_pct = 6.5
+if "mat" not in st.session_state:
+    st.session_state.mat = 7.0
+if "ytm_pct" not in st.session_state:
+    st.session_state.ytm_pct = 8.0
+if "rf_pct" not in st.session_state:
+    st.session_state.rf_pct = 3.0
+if "freq_label" not in st.session_state:
+    st.session_state.freq_label = "Semi"
+
+# ── INPUT CONTROLS ────────────────────────────────────────────────────────────
+
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+
+# FACE
+with col1:
+    st.markdown('<div class="input-label">Face</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("−", key="face_minus"):
+            st.session_state.face = max(50.0, st.session_state.face - 5.0)
+    with btn_col2:
+        if st.button("+", key="face_plus"):
+            st.session_state.face = min(500.0, st.session_state.face + 5.0)
+    st.session_state.face = st.slider("##face", 50.0, 500.0, st.session_state.face, 1.0, label_visibility="collapsed")
+
+# COUPON
+with col2:
+    st.markdown('<div class="input-label">Coupon (%)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("−", key="coupon_minus"):
+            st.session_state.coupon_pct = max(0.5, st.session_state.coupon_pct - 0.25)
+    with btn_col2:
+        if st.button("+", key="coupon_plus"):
+            st.session_state.coupon_pct = min(15.0, st.session_state.coupon_pct + 0.25)
+    st.session_state.coupon_pct = st.slider("##coupon", 0.5, 15.0, st.session_state.coupon_pct, 0.05, label_visibility="collapsed")
+
+# MATURITY
+with col3:
+    st.markdown('<div class="input-label">Maturity (yr)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("−", key="mat_minus"):
+            st.session_state.mat = max(0.5, st.session_state.mat - 0.5)
+    with btn_col2:
+        if st.button("+", key="mat_plus"):
+            st.session_state.mat = min(30.0, st.session_state.mat + 0.5)
+    st.session_state.mat = st.slider("##mat", 0.5, 30.0, st.session_state.mat, 0.25, label_visibility="collapsed")
+
+# FREQUENCY
+with col4:
+    st.markdown('<div class="input-label">Freq</div>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.session_state.freq_label = st.selectbox("##freq", ["Annual", "Semi", "Quarterly"], index=["Annual", "Semi", "Quarterly"].index(st.session_state.freq_label), label_visibility="collapsed")
+
+# YTM
+with col5:
+    st.markdown('<div class="input-label">YTM (%)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("−", key="ytm_minus"):
+            st.session_state.ytm_pct = max(0.5, st.session_state.ytm_pct - 0.25)
+    with btn_col2:
+        if st.button("+", key="ytm_plus"):
+            st.session_state.ytm_pct = min(20.0, st.session_state.ytm_pct + 0.25)
+    st.session_state.ytm_pct = st.slider("##ytm", 0.5, 20.0, st.session_state.ytm_pct, 0.05, label_visibility="collapsed")
+
+# RISK-FREE
+with col6:
+    st.markdown('<div class="input-label">Risk-Free (%)</div>', unsafe_allow_html=True)
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("−", key="rf_minus"):
+            st.session_state.rf_pct = max(0.1, st.session_state.rf_pct - 0.25)
+    with btn_col2:
+        if st.button("+", key="rf_plus"):
+            st.session_state.rf_pct = min(15.0, st.session_state.rf_pct + 0.25)
+    st.session_state.rf_pct = st.slider("##rf", 0.1, 15.0, st.session_state.rf_pct, 0.05, label_visibility="collapsed")
+
+# ── EXTRACT VALUES ────────────────────────────────────────────────────────────
+
+face = st.session_state.face
+coupon_pct = st.session_state.coupon_pct
+coupon = coupon_pct / 100
+mat = st.session_state.mat
+freq_map = {"Annual": 1, "Semi": 2, "Quarterly": 4}
+freq = freq_map[st.session_state.freq_label]
+ytm_pct = st.session_state.ytm_pct
+ytm = ytm_pct / 100
+rf_pct = st.session_state.rf_pct
+rf = rf_pct / 100
+
+# ── CALCULATIONS & DISPLAY ────────────────────────────────────────────────────
 
 try:
-    st.title("Asset Swap Pricer")
-    
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    
-    with col1:
-        face = st.number_input("Face", value=100.0, step=1.0, format="%.2f", label_visibility="collapsed")
-    
-    with col2:
-        coupon = st.slider("Coupon (%)", 0.0, 15.0, 6.45, 0.05, label_visibility="collapsed") / 100
-    
-    with col3:
-        T = st.slider("Maturity (yr)", 0.25, 30.0, 7.0, 0.25, label_visibility="collapsed")
-    
-    with col4:
-        freq_name = st.selectbox("Freq", ["Annual", "Semi", "Quarterly"], index=1, label_visibility="collapsed")
-        freq = {"Annual": 1, "Semi": 2, "Quarterly": 4}[freq_name]
-    
-    with col5:
-        ytm = st.slider("YTM (%)", 0.1, 15.0, 8.0, 0.05, label_visibility="collapsed") / 100
-    
-    with col6:
-        rf = st.slider("Risk-Free (%)", 0.1, 15.0, 5.95, 0.05, label_visibility="collapsed") / 100
-    
-    # ── CALCULATIONS ──────────────────────────────────────────────────────────
-    
-    P = price_dirty(coupon, T, ytm, face, freq)
-    soulte = P - face
-    asw_par = par_asw(coupon, T, ytm, rf, face, freq)
-    z_spread = 500.0
-    y_asw = yield_asw(coupon, T, ytm, rf, z_spread, face, freq)
-    mod_dur = mod_duration(coupon, T, ytm, face, freq)
-    dv01_val = dv01(coupon, T, ytm, face, freq)
-    ann = annuity_factor(ytm, T, freq)
+    P = price_dirty(coupon, mat, ytm, face, freq) / face * 100
+    slt = soulte(coupon, mat, ytm, face, freq)
+    par_asw_val = par_asw(coupon, mat, ytm, rf, face, freq)
+    z_sp = z_spread(coupon, mat, ytm, rf, face, freq)
+    y_asw = yield_asw(coupon, mat, ytm, rf, face, freq)
+    md = modified_duration(coupon, mat, ytm, face, freq)
+    dv01_val = dv01(coupon, mat, ytm, face, freq)
+    ann = annuity_factor(ytm, mat, freq)
     
     # ── METRICS ROW ───────────────────────────────────────────────────────────
     
-    col_m1, col_m2, col_m3, col_m4, col_m5, col_m6, col_m7, col_m8 = st.columns(8)
+    m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
     
-    with col_m1:
+    with m1:
         st.metric("Dirty Price", f"{P:.4f}")
-    with col_m2:
-        st.metric("Soulte", f"{soulte:.4f}")
-    with col_m3:
-        st.metric("Par ASW (bps)", f"{asw_par:.2f}")
-    with col_m4:
-        st.metric("Z-Spread (bps)", f"{z_spread:.2f}")
-    with col_m5:
+    with m2:
+        st.metric("Soulte", f"{slt:.4f}")
+    with m3:
+        st.metric("Par ASW (bps)", f"{par_asw_val:.2f}")
+    with m4:
+        st.metric("Z-Spread (bps)", f"{z_sp:.2f}")
+    with m5:
         st.metric("Yield ASW (bps)", f"{y_asw:.2f}")
-    with col_m6:
-        st.metric("Mod. Duration", f"{mod_dur:.3f} yr")
-    with col_m7:
-        st.metric("DV01", f"{dv01_val*100:.3f}%")
-    with col_m8:
-        st.metric("Annuity", f"{ann:.3f}")
+    with m6:
+        st.metric("Mod. Duration", f"{md:.4f} yr")
+    with m7:
+        st.metric("DV01", f"{dv01_val:.6f}")
+    with m8:
+        st.metric("Annuity", f"{ann:.6f}")
     
-    # ── FIGURE 1: Price vs YTM ────────────────────────────────────────────────
     
-    ytm_grid = np.linspace(0.001, 0.15, 100)
-    prices = np.array([price_dirty(coupon, T, y_, face, freq) for y_ in ytm_grid])
+    # ── GRAPH GENERATION ──────────────────────────────────────────────────────
+    
+    ytm_grid = np.linspace(max(0.002, ytm - 0.08), min(0.25, ytm + 0.12), 120)
+    mat_grid = np.linspace(0.5, 30.0, 60)
+    
+    # Pre-calculate common arrays
+    prices = [price_dirty(coupon, mat, y, face, freq) / face * 100 for y in ytm_grid]
+    par_asws = [par_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    z_spreads = [z_spread(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    y_asws = [yield_asw(coupon, mat, y, rf, face, freq) for y in ytm_grid]
+    soultes = [soulte(coupon, mat, y, face, freq) for y in ytm_grid]
+    durations = [modified_duration(coupon, mat, y, face, freq) for y in ytm_grid]
+    dv01s = [dv01(coupon, mat, y, face, freq) for y in ytm_grid]
+    
+    # ── FIGURE 1: Bond Price vs YTM ───────────────────────────────────────────
     
     fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(x=ytm_grid*100, y=prices, mode="lines", name="Price", 
-                              line=dict(color=CA, width=2.5), hovertemplate="%{y:.4f}<extra></extra>"))
-    fig1.add_vline(x=ytm*100, line=dict(color=CB, width=1.5, dash="dash"), annotation_text="YTM")
+    fig1.add_trace(go.Scatter(x=ytm_grid*100, y=prices, mode="lines", name="Bond Price",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.2f}<extra></extra>"))
+    fig1.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig1.update_layout(template=DARK, height=H, margin=MARGIN, title="Bond Price vs YTM",
-                       xaxis_title="YTM (%)", yaxis_title="Price", hovermode="x unified", showlegend=False)
+                      xaxis_title="YTM (%)", yaxis_title="Price (%)", hovermode="x unified", showlegend=False)
     fig1.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     fig1.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 2: Par ASW vs YTM ──────────────────────────────────────────────
     
-    asw_vals = np.array([par_asw(coupon, T, y_, rf, face, freq) for y_ in ytm_grid])
-    
     fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=ytm_grid*100, y=asw_vals, mode="lines", name="Par ASW",
-                              line=dict(color=CA, width=2.5), hovertemplate="%{y:.2f} bps<extra></extra>"))
-    fig2.add_hline(y=0, line=dict(color="white", width=0.5, dash="dash"))
-    fig2.add_vline(x=ytm*100, line=dict(color=CB, width=1.5, dash="dash"), annotation_text="YTM")
+    fig2.add_trace(go.Scatter(x=ytm_grid*100, y=par_asws, mode="lines", name="Par ASW",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>"))
+    fig2.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig2.update_layout(template=DARK, height=H, margin=MARGIN, title="Par ASW vs YTM",
-                       xaxis_title="YTM (%)", yaxis_title="Par ASW (bps)", hovermode="x unified", showlegend=False)
+                      xaxis_title="YTM (%)", yaxis_title="Par ASW (bps)", hovermode="x unified", showlegend=False)
     fig2.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     fig2.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 3: Soulte vs YTM ───────────────────────────────────────────────
     
-    soultes = np.array([price_dirty(coupon, T, y_, face, freq) - face for y_ in ytm_grid])
-    
     fig3 = go.Figure()
     fig3.add_trace(go.Scatter(x=ytm_grid*100, y=soultes, mode="lines", name="Soulte",
-                              line=dict(color=CC, width=2.5), hovertemplate="%{y:.4f}<extra></extra>"))
-    fig3.add_hline(y=0, line=dict(color="white", width=1, dash="dash"), annotation_text="At Par")
-    fig3.add_vline(x=ytm*100, line=dict(color=CB, width=1.5, dash="dash"), annotation_text="YTM")
+                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f}<extra></extra>"))
+    fig3.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, annotation_text="At Par", annotation_position="right")
+    fig3.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig3.update_layout(template=DARK, height=H, margin=MARGIN, title="Soulte vs YTM",
-                       xaxis_title="YTM (%)", yaxis_title="Soulte (price)", hovermode="x unified", showlegend=False)
+                      xaxis_title="YTM (%)", yaxis_title="Soulte (price)", hovermode="x unified", showlegend=False)
     fig3.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     fig3.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
-    # ── FIGURE 4: Modified Duration vs YTM ────────────────────────────────────
-    
-    durations = np.array([mod_duration(coupon, T, y_, face, freq) for y_ in ytm_grid])
+    # ── FIGURE 4: Z-Spread vs YTM ─────────────────────────────────────────────
     
     fig4 = go.Figure()
-    fig4.add_trace(go.Scatter(x=ytm_grid*100, y=durations, mode="lines", name="Mod. Duration",
-                              line=dict(color=CA, width=2.5), hovertemplate="%{y:.4f} yr<extra></extra>"))
-    fig4.add_vline(x=ytm*100, line=dict(color=CB, width=1.5, dash="dash"), annotation_text="YTM")
-    fig4.update_layout(template=DARK, height=H, margin=MARGIN, title="Mod. Duration vs YTM",
-                       xaxis_title="YTM (%)", yaxis_title="Duration (yr)", hovermode="x unified", showlegend=False)
+    fig4.add_trace(go.Scatter(x=ytm_grid*100, y=z_spreads, mode="lines", name="Z-Spread",
+                     line=dict(color=CB, width=2.5), hovertemplate="%{x:.2f}% → %{y:.1f} bps<extra></extra>"))
+    fig4.add_vline(x=ytm_pct, line_dash="dash", line_color=CA, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig4.update_layout(template=DARK, height=H, margin=MARGIN, title="Z-Spread vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Z-Spread (bps)", hovermode="x unified", showlegend=False)
     fig4.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     fig4.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
-    # ── FIGURE 5: Par ASW vs Maturity ─────────────────────────────────────────
-    
-    mat_grid = np.linspace(0.25, 30, 100)
-    asw_mats = np.array([par_asw(coupon, m_, ytm, rf, face, freq) for m_ in mat_grid])
+    # ── FIGURE 5: Modified Duration vs YTM ────────────────────────────────────
     
     fig5 = go.Figure()
-    fig5.add_trace(go.Scatter(x=mat_grid, y=asw_mats, mode="lines", name="Par ASW",
-                              line=dict(color=CA, width=2.5), hovertemplate="%{y:.2f} bps<extra></extra>"))
-    fig5.add_hline(y=0, line=dict(color="white", width=0.5, dash="dash"))
-    fig5.add_vline(x=T, line=dict(color=CB, width=1.5, dash="dash"), annotation_text="Maturity")
-    fig5.update_layout(template=DARK, height=H, margin=MARGIN, title="Par ASW vs Maturity",
-                       xaxis_title="Maturity (yr)", yaxis_title="Par ASW (bps)", hovermode="x unified", showlegend=False)
+    fig5.add_trace(go.Scatter(x=ytm_grid*100, y=durations, mode="lines", name="Mod. Duration",
+                     line=dict(color=CA, width=2.5), hovertemplate="%{x:.2f}% → %{y:.4f} yr<extra></extra>"))
+    fig5.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
+    fig5.update_layout(template=DARK, height=H, margin=MARGIN, title="Modified Duration vs YTM",
+                      xaxis_title="YTM (%)", yaxis_title="Duration (yr)", hovermode="x unified", showlegend=False)
     fig5.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     fig5.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 6: DV01 vs YTM ─────────────────────────────────────────────────
     
-    dv01s = np.array([dv01(coupon, T, y_, face, freq) for y_ in ytm_grid])
-    
     fig6 = go.Figure()
-    fig6.add_trace(go.Scatter(x=ytm_grid*100, y=dv01s*100, mode="lines", name="DV01",
-                              line=dict(color=CA, width=2.5), hovertemplate="%{y:.3f}%<extra></extra>"))
-    fig6.add_vline(x=ytm*100, line=dict(color=CB, width=1.5, dash="dash"), annotation_text="YTM")
+    fig6.add_trace(go.Scatter(x=ytm_grid*100, y=dv01s, mode="lines", name="DV01",
+                     line=dict(color=CC, width=2.5), hovertemplate="%{x:.2f}% → %{y:.6f}<extra></extra>"))
+    fig6.add_vline(x=ytm_pct, line_dash="dash", line_color=CB, line_width=1.5, annotation_text="YTM", annotation_position="top right")
     fig6.update_layout(template=DARK, height=H, margin=MARGIN, title="DV01 vs YTM",
-                      xaxis_title="YTM (%)", yaxis_title="DV01 (%)", hovermode="x unified", showlegend=False)
+                      xaxis_title="YTM (%)", yaxis_title="DV01", hovermode="x unified", showlegend=False)
     fig6.update_xaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     fig6.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.1)")
     
     # ── FIGURE 7: Par ASW Surface (Maturity × YTM) ────────────────────────────
     
-    mat_grid_s = np.linspace(0.5, 30, 50)
-    ytm_grid_s = np.linspace(0.001, 0.15, 50)
-    Z_s = np.array([
-        [par_asw(coupon, m_, y_, rf, face, freq) for y_ in ytm_grid_s]
-        for m_ in mat_grid_s
-    ])
+    @st.cache_data(show_spinner=False, ttl=3600)
+    def _surface(c, r_, F, freq_):
+        Z = np.array([
+            [par_asw(c, m_, y_, r_, F, freq_) for y_ in ytm_grid]
+            for m_ in mat_grid
+        ])
+        return mat_grid, ytm_grid, Z
+    
+    mats_s, ytms_s, Z_s = _surface(coupon, rf, face, freq)
     
     fig7 = go.Figure(go.Surface(
-        x=ytm_grid_s*100, y=mat_grid_s, z=Z_s,
+        x=ytms_s*100, y=mats_s, z=Z_s,
         colorscale="Viridis",
         colorbar=dict(title="Par ASW<br>(bps)", thickness=12, len=0.7, tickfont=dict(size=9))
     ))

@@ -276,9 +276,9 @@ try:
     m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
     
     with m1:
-        st.metric("Dirty Price", f"{P:.4f}")
+        st.metric("Dirty Price", f"{P:.3f}")
     with m2:
-        st.metric("Soulte", f"{slt:.4f}")
+        st.metric("Soulte", f"{slt:.3f}")
     with m3:
         st.metric("Par ASW (bps)", f"{par_asw_val:.2f}")
     with m4:

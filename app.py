@@ -13,12 +13,29 @@ CA, CB, CC = "#00b4d8", "#ef233c", "#f4a261"
 
 # ── MATH ──────────────────────────────────────────────────────────────────────
 
+SLOPE_PER_YEAR = 0.0030  # 30bps per year beyond the 1Y tenor
+
+
+def zero_rate(t, rf_1y: float) -> np.ndarray:
+    """Upward-sloping zero curve.
+    
+    rf_1y is the continuously-compounded 1Y zero rate.
+    For t <= 1: flat at rf_1y.
+    For t > 1:  rf_1y + 30bps × (t - 1).
+    """
+    t_arr = np.asarray(t, dtype=float)
+    return rf_1y + np.maximum(0.0, t_arr - 1.0) * SLOPE_PER_YEAR
+
+
 def discount_factors(rate: float, T: float, freq: int) -> tuple[np.ndarray, np.ndarray]:
     """Generate coupon dates and discount factors."""
     n_coupons = int(np.floor(T * freq))
     t_coupons = np.array([k / freq for k in range(1, n_coupons + 1)])
     
-    if T > t_coupons[-1] + 1e-12:
+    # Handle case where T is shorter than one coupon period (empty t_coupons)
+    if len(t_coupons) == 0:
+        t = np.array([T])
+    elif T > t_coupons[-1] + 1e-12:
         t = np.append(t_coupons, T)
     else:
         t = t_coupons
@@ -58,36 +75,72 @@ def price_dirty(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int
     return float(np.dot(cf, df))
 
 
-def annuity_factor(ytm: float, T: float, freq: int) -> float:
-    """Calculate annuity factor."""
+def annuity_factor(rf_1y: float, T: float, freq: int) -> float:
+    """Calculate annuity factor using the sloped zero curve.
+    
+    sum of (1/freq) * D(0, t_i) for each coupon date,
+    where D(0, t) = exp(-r(t) * t) and r(t) follows the zero curve.
+    For stub periods (T < 1/freq), uses the stub fraction * D(0, T).
+    """
     n_coupons = int(np.floor(T * freq))
     coupon_period = 1 / freq
     t_coupons = np.array([k / freq for k in range(1, n_coupons + 1)])
-    df_coupons = np.exp(-ytm * t_coupons)
-    return float(np.sum(df_coupons * coupon_period))
+    
+    if len(t_coupons) == 0:
+        r_T = float(zero_rate(T, rf_1y))
+        return float(T * np.exp(-r_T * T))
+    
+    rates = zero_rate(t_coupons, rf_1y)
+    df_coupons = np.exp(-rates * t_coupons)
+    total = float(np.sum(df_coupons * coupon_period))
+    
+    # Add stub period if maturity extends beyond the last coupon date
+    last_coupon_date = n_coupons / freq
+    if T > last_coupon_date + 1e-12:
+        stub = T - last_coupon_date
+        r_T = float(zero_rate(T, rf_1y))
+        total += stub * np.exp(-r_T * T)
+    
+    return total
 
 
-def par_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate par asset swap spread."""
+def par_asw(coupon: float, T: float, ytm: float, rf_1y: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate par asset swap spread using the sloped zero curve.
+    
+    Formula: s = (P_swap - P) / A_rf
+    where P_swap = c * A_rf + D_rf(0,T)   (bond priced on the swap/rf curve)
+    and   P = dirty market price / Face    (normalized)
+    
+    Everything in the numerator must be discounted on the SWAP curve,
+    not the bond's own yield (ytm). The ytm only enters through P.
+    """
     P = price_dirty(coupon, T, ytm, F, freq) / F
-    ann_ytm = annuity_factor(ytm, T, freq)
-    ann_rf = annuity_factor(rf, T, freq)
-    df_terminal = np.exp(-rf * T)
+    ann_rf = annuity_factor(rf_1y, T, freq)
+    r_T = float(zero_rate(T, rf_1y))
+    df_terminal = np.exp(-r_T * T)
     
     if ann_rf < 1e-12:
         return float("nan")
     
-    spread = (coupon * ann_ytm + df_terminal - P) / ann_rf
+    # P_swap = coupon * ann_rf + df_terminal  (theoretical price on swap curve)
+    # spread = (P_swap - P) / ann_rf
+    spread = (coupon * ann_rf + df_terminal - P) / ann_rf
     return float(spread * 1e4)
 
 
-def z_spread(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate Z-spread."""
+def z_spread(coupon: float, T: float, ytm: float, rf_1y: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate Z-spread over the sloped zero curve.
+    
+    Finds the constant spread s such that:
+    sum( cf_i * exp(-(r(t_i) + s) * t_i) ) = P
+    where r(t) is the sloped zero curve.
+    """
     P = price_dirty(coupon, T, ytm, F, freq)
     t, cf = cashflows(coupon, T, F, freq)
+    base_rates = zero_rate(t, rf_1y)
     
     def pv_residual(s):
-        df = np.exp(-(rf + s) * t)
+        df = np.exp(-(base_rates + s) * t)
         return float(np.dot(cf, df)) - P
     
     try:
@@ -97,15 +150,20 @@ def z_spread(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, f
         return float("nan")
 
 
-def yield_asw(coupon: float, T: float, ytm: float, rf: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate yield ASW."""
-    return float((ytm - rf) * 1e4)
+def yield_asw(coupon: float, T: float, ytm: float, rf_1y: float, F: float = 100.0, freq: int = 2) -> float:
+    """Calculate yield ASW vs the zero rate at maturity."""
+    r_T = float(zero_rate(T, rf_1y))
+    return float((ytm - r_T) * 1e4)
 
 
 def soulte(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate soulte."""
+    """Calculate soulte (par ASW convention: Face - DirtyPrice).
+    
+    Positive = bond is cheap (below par), investor receives cash.
+    Negative = bond is rich (above par), investor pays cash.
+    """
     P = price_dirty(coupon, T, ytm, F, freq)
-    return float(P - F)
+    return float(F - P)
 
 
 def macaulay_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
@@ -122,17 +180,16 @@ def macaulay_duration(coupon: float, T: float, ytm: float, F: float = 100.0, fre
 
 
 def modified_duration(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate modified duration."""
-    D_mac = macaulay_duration(coupon, T, ytm, F, freq)
+    """Calculate modified duration.
     
-    if np.isnan(D_mac):
-        return float("nan")
-    
-    return float(D_mac / (1 + ytm / freq))
+    Under continuous compounding, modified duration = Macaulay duration.
+    The (1 + y/freq) adjustment only applies to discrete compounding.
+    """
+    return macaulay_duration(coupon, T, ytm, F, freq)
 
 
 def dv01(coupon: float, T: float, ytm: float, F: float = 100.0, freq: int = 2) -> float:
-    """Calculate DV01."""
+    """Calculate DV01 (dollar value of 1bp yield change)."""
     P = price_dirty(coupon, T, ytm, F, freq)
     MD = modified_duration(coupon, T, ytm, F, freq)
     
@@ -159,7 +216,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Asset Swap Pricer")
+title_col, refresh_col = st.columns([8, 1])
+with title_col:
+    st.title("Asset Swap Pricer")
+with refresh_col:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔄 Refresh", key="refresh", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 # ── INITIALIZE SESSION STATE ──────────────────────────────────────────────────
 
@@ -236,7 +300,7 @@ with col5:
 
 # RISK-FREE
 with col6:
-    st.markdown('<div class="input-label">Risk-Free (%)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="input-label">Risk-Free 1Y (%)</div>', unsafe_allow_html=True)
     btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
         if st.button("−", key="rf_minus"):
@@ -269,7 +333,7 @@ try:
     y_asw = yield_asw(coupon, mat, ytm, rf, face, freq)
     md = modified_duration(coupon, mat, ytm, face, freq)
     dv01_val = dv01(coupon, mat, ytm, face, freq)
-    ann = annuity_factor(ytm, mat, freq)
+    ann = annuity_factor(rf, mat, freq)
     
     # ── METRICS ROW ───────────────────────────────────────────────────────────
     
@@ -288,7 +352,7 @@ try:
     with m6:
         st.metric("Mod Duration (yr)", f"{md:.3f}")
     with m7:
-        st.metric("DV01", f"{dv01_val*100:.3f}%")
+        st.metric("DV01", f"{dv01_val:.4f}")
     with m8:
         st.metric("Annuity", f"{ann:.3f}")
     

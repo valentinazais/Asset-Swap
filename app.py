@@ -221,9 +221,15 @@ with title_col:
     st.title("Asset Swap Pricer")
 with refresh_col:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🔄 Refresh", key="refresh", use_container_width=True):
-        st.cache_data.clear()
+    if st.button("↺ Reset", key="reset", use_container_width=True):
+        st.session_state.face = 100.0
+        st.session_state.coupon_pct = 6.5
+        st.session_state.mat = 7.0
+        st.session_state.ytm_pct = 8.0
+        st.session_state.rf_pct = 3.0
+        st.session_state.freq_label = "Semi"
         st.rerun()
+
 
 # ── INITIALIZE SESSION STATE ──────────────────────────────────────────────────
 

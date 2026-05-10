@@ -221,7 +221,7 @@ with title_col:
     st.title("Asset Swap Pricer")
 with refresh_col:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("↺ Reset", key="reset", use_container_width=True):
+    if st.button("Reset parameters", key="reset", use_container_width=True):
         st.session_state.face = 100.0
         st.session_state.coupon_pct = 6.5
         st.session_state.mat = 7.0
